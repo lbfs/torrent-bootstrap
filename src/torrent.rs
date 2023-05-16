@@ -17,7 +17,7 @@ pub struct PieceFile {
 pub struct Piece {
     pub position: usize,
     pub files: Vec<PieceFile>,
-    pub hash: String,
+    pub piece_hash: String,
     pub length: u64,
 }
 
@@ -27,6 +27,7 @@ pub struct Torrent {
     pub pieces: Vec<Piece>,
     pub piece_length: usize,
     pub info_hash: String,
+    pub path: PathBuf
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +52,7 @@ impl Torrent {
             pieces: Vec::new(),
             piece_length: 0,
             info_hash: info_hash,
+            path: path.to_path_buf()
         };
 
         // Generate file read boundries and hashes for individual hashes
@@ -67,7 +69,6 @@ impl Torrent {
         Ok(torrent)
     }
 
-    // TODO: Test
     fn format_content_layout(lava_torrent: &LavaTorrent, file_path: Option<&Path>) -> PathBuf {
         let mut path = PathBuf::from(&lava_torrent.name);
 
@@ -162,12 +163,10 @@ impl Torrent {
                 total_length += piece_file.read_length;
             }
 
-            let hash = Torrent::get_sha1_hexdigest(&lava_torrent, pieces.len());
-
             pieces.push(Piece {
                 position: pieces.len(),
                 files: piece_files,
-                hash: hash,
+                piece_hash: Torrent::get_sha1_hexdigest(&lava_torrent, pieces.len()),
                 length: total_length,
             })
         }
