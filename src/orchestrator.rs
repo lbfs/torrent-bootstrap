@@ -6,8 +6,9 @@ use std::{
     time::Instant, thread::{self, JoinHandle}, sync::{Arc, Mutex},
 };
 
-use crypto::{digest::Digest, sha1::Sha1};
+use crypto::{digest::Digest, sha1::Sha1, sha2::Sha256};
 use lrumap::LruHashMap;
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
     finder::LengthFileFinder,
@@ -46,6 +47,12 @@ impl Orchestrator {
         let finder = Orchestrator::setup_finder(options, &torrents);
         println!(
             "Finder finished caching and finished at {} seconds.",
+            now.elapsed().as_secs()
+        );
+
+        let finder = Orchestrator::deduplicate(finder)?;
+        println!(
+            "Finder de-duplication finished at {} seconds.",
             now.elapsed().as_secs()
         );
         
@@ -182,6 +189,75 @@ impl Orchestrator {
         }
 
         Ok(())
+    }
+
+    // This code is the most garbage code in the entire app, clean it up.
+    fn deduplicate(finder: LengthFileFinder) -> Result<LengthFileFinder, std::io::Error> {
+        let mut existence: HashSet<String> = HashSet::new();
+        let mut cache: HashMap<u64, Vec<PathBuf>> = HashMap::new();
+        let pathbuf_cache: HashMap<PathBuf, String> = HashMap::new();
+        let pathbuf_cache = Mutex::new(pathbuf_cache);
+        
+        let mut kept = 0;
+        let mut removed = 0;
+
+        let mut all_paths = Vec::new();
+        for (_, paths) in &finder.cache {
+            if paths.len() <= 1 {
+                continue;
+            }
+
+            for path in paths {
+                all_paths.push(path.to_path_buf());
+            }
+        }
+        
+        all_paths.into_par_iter().for_each(|path| {
+            let mut input = File::open(&path).unwrap();
+            let mut buffer = Vec::new();
+            input.read_to_end(&mut buffer).unwrap();
+            let mut context = Sha256::new();
+            context.input(&buffer);
+            let hash = context.result_str();
+            let mut pathbuf_cache = pathbuf_cache.lock().unwrap();
+            pathbuf_cache.insert(path, hash);
+        });
+
+        let pathbuf_cache = pathbuf_cache.lock().unwrap();
+        for (length, paths) in finder.cache {
+            if paths.len() <= 1 {
+                for path in paths {
+                    if !cache.contains_key(&length) {
+                        cache.insert(length, Vec::new());
+                    }
+        
+                    let items = cache.get_mut(&length).unwrap();
+                    items.push(path);
+                }
+            } else {
+                for path in paths {
+                    let hash = pathbuf_cache.get(&path).unwrap();
+                    if existence.insert(hash.to_string()) {
+                        kept += 1;
+    
+                        if !cache.contains_key(&length) {
+                            cache.insert(length, Vec::new());
+                        }
+            
+                        let items = cache.get_mut(&length).unwrap();
+                        items.push(path);
+                    } else {
+                        removed += 1;
+                    }
+                }
+            }
+        }
+
+        let mut finder = LengthFileFinder::new();
+        finder.cache = cache;
+
+        println!("File de-duplication removed {} and kept {} files in the cache.", removed, kept);
+        Ok(finder)
     }
 }
 
