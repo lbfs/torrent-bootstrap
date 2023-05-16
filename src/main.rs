@@ -24,11 +24,11 @@ fn main() {
     let mut scan_directories: Vec<PathBuf> = Vec::new();
     scan_directories.push(Path::new(r#""#).to_path_buf());
 
-    let export_directory = Path::new(r#""#);
+    let export_directory = Path::new(r#""#).to_path_buf();
 
     let options = OrchestratorOptions {
-        torrents_paths: &torrents_paths,
-        scan_directories: &scan_directories,
+        torrents_paths: torrents_paths,
+        scan_directories: scan_directories,
         export_directory: export_directory,
         threads: 16
     };
@@ -38,5 +38,5 @@ fn main() {
     }
 
     let elapsed = now.elapsed().as_secs();
-    println!("Time elapsed took {} seconds for {} torrents.", elapsed, torrents_paths.len());
+    println!("Time elapsed took {} seconds for {} torrents.", elapsed, options.torrents_paths.len());
 }

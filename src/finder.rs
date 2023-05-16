@@ -4,6 +4,8 @@ use std::{
 };
 use walkdir::WalkDir;
 
+
+#[derive(Clone)]
 pub struct LengthFileFinder {
     pub cache: HashMap<u64, Vec<PathBuf>>,
 }
