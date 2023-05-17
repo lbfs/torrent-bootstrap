@@ -158,13 +158,15 @@ dependencies = [
 
 [[package]]
 name = "lava_torrent"
-version = "0.10.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6371ac668775cf28fcf777c5819103ff396bc96d971b4328e9cadd011b21fe87"
+checksum = "81730ad85660dd85c8196a684cb51cee60c69c8f99c82d6ecb6df5bc79c4859d"
 dependencies = [
  "conv",
  "itertools",
+ "num_cpus",
  "percent-encoding",
+ "rayon",
  "sha1",
  "thiserror",
 ]
@@ -386,7 +388,6 @@ version = "0.1.0"
 dependencies = [
  "lava_torrent",
  "lrumap",
- "rayon",
  "rust-crypto",
  "walkdir",
 ]

@@ -8,7 +8,6 @@ use std::{
 
 use crypto::{digest::Digest, sha1::Sha1, sha2::Sha256};
 use lrumap::LruHashMap;
-use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
     finder::LengthFileFinder,
@@ -50,12 +49,6 @@ impl Orchestrator {
             now.elapsed().as_secs()
         );
 
-        let finder = Orchestrator::deduplicate(finder)?;
-        println!(
-            "Finder de-duplication finished at {} seconds.",
-            now.elapsed().as_secs()
-        );
-        
         // "Pre-allocate" all the files on the disk so we have some place to write to
         Orchestrator::setup_export(options, &torrents)?;
         println!(
@@ -63,6 +56,12 @@ impl Orchestrator {
             now.elapsed().as_secs()
         );
 
+        // Deduplicate
+        let finder = Orchestrator::deduplicate(finder, options)?;
+        println!(
+            "Finder de-duplication finished at {} seconds.",
+            now.elapsed().as_secs()
+        );
 
         // Start!
         SingleFileOrchestrator::start(options, &torrents, &finder)?;
@@ -191,74 +190,106 @@ impl Orchestrator {
         Ok(())
     }
 
-    // This code is the most garbage code in the entire app, clean it up.
-    fn deduplicate(finder: LengthFileFinder) -> Result<LengthFileFinder, std::io::Error> {
-        let mut existence: HashSet<String> = HashSet::new();
-        let mut cache: HashMap<u64, Vec<PathBuf>> = HashMap::new();
-        let pathbuf_cache: HashMap<PathBuf, String> = HashMap::new();
-        let pathbuf_cache = Mutex::new(pathbuf_cache);
-        
-        let mut kept = 0;
-        let mut removed = 0;
+    fn deduplicate(finder: LengthFileFinder, options: &OrchestratorOptions) -> Result<LengthFileFinder, std::io::Error> {
+        // Get original file count for logging purposes
+        let mut original_count = 0;
+        for value in finder.cache.values() {
+            original_count += value.len();
+        }
 
-        let mut all_paths = Vec::new();
-        for (_, paths) in &finder.cache {
-            if paths.len() <= 1 {
-                continue;
-            }
+        // Seperate entries based on what actually needs to be de-duplicated!
+        let mut original: HashMap<u64, Vec<PathBuf>> = finder.cache;
+        let mut updated: HashMap<u64, Vec<PathBuf>> = HashMap::new();
 
-            for path in paths {
-                all_paths.push(path.to_path_buf());
+        let keys: Vec<u64> = original.keys().cloned().collect();
+        for key in keys {
+            let values = original.get(&key).unwrap();
+            if values.len() <= 1 {
+                updated.insert(key, original.remove(&key).unwrap());
             }
         }
-        
-        all_paths.into_par_iter().for_each(|path| {
-            let mut input = File::open(&path).unwrap();
-            let mut buffer = Vec::new();
-            input.read_to_end(&mut buffer).unwrap();
-            let mut context = Sha256::new();
-            context.input(&buffer);
-            let hash = context.result_str();
-            let mut pathbuf_cache = pathbuf_cache.lock().unwrap();
-            pathbuf_cache.insert(path, hash);
-        });
 
-        let pathbuf_cache = pathbuf_cache.lock().unwrap();
-        for (length, paths) in finder.cache {
-            if paths.len() <= 1 {
-                for path in paths {
-                    if !cache.contains_key(&length) {
-                        cache.insert(length, Vec::new());
-                    }
-        
-                    let items = cache.get_mut(&length).unwrap();
-                    items.push(path);
-                }
-            } else {
-                for path in paths {
-                    let hash = pathbuf_cache.get(&path).unwrap();
-                    if existence.insert(hash.to_string()) {
-                        kept += 1;
-    
-                        if !cache.contains_key(&length) {
-                            cache.insert(length, Vec::new());
+        // Perform the actual de-duplication
+        let work = Orchestrator::partition_work_by_thread(options.threads, original);
+        let mut handles: Vec<JoinHandle<Result<HashMap<u64, Vec<PathBuf>>, std::io::Error>>> = Vec::with_capacity(options.threads);
+        for (_, entry) in work {
+            let handle: JoinHandle<Result<HashMap<u64, Vec<PathBuf>>, std::io::Error>> = thread::spawn(move || {
+                let mut unique: HashMap<u64, Vec<PathBuf>> = HashMap::new();
+
+                for (file_length, paths) in entry {
+                    let mut existence: HashSet<String> = HashSet::new();
+                    let mut found: Vec<PathBuf> = Vec::new();
+
+                    for path in paths {
+                        // Open the entire file
+                        let mut input = File::open(&path)?;
+                        let mut buffer = Vec::new();
+                        input.read_to_end(&mut buffer)?;
+
+                        // Generate the hash
+                        let mut context = Sha256::new();
+                        context.input(&buffer);
+                        let hash = context.result_str();
+
+                        if !existence.contains(&hash) {
+                            found.push(path);
+                            existence.insert(hash);
                         }
-            
-                        let items = cache.get_mut(&length).unwrap();
-                        items.push(path);
-                    } else {
-                        removed += 1;
                     }
+
+                    if found.len() > 0 {
+                        unique.insert(file_length, found);
+                    }   
                 }
-            }
+
+                Ok(unique)
+            });
+
+            handles.push(handle);
         }
 
-        let mut finder = LengthFileFinder::new();
-        finder.cache = cache;
+        for handle in handles {
+            let result = handle.join().unwrap().unwrap();
+            updated.extend(result);
+        }
 
-        println!("File de-duplication removed {} and kept {} files in the cache.", removed, kept);
-        Ok(finder)
+        // Get updated file count for logging purposes
+        let mut updated_count = 0;
+        for value in updated.values() {
+            updated_count += value.len();
+        }
+
+        // Update the finder
+        let mut finder = LengthFileFinder::new();
+        finder.cache = updated;
+
+        // Print and return
+        println!("File de-duplication removed {} and kept {} files in the cache.", original_count - updated_count, updated_count);
+        return Ok(finder);
     }
+
+    fn partition_work_by_thread(
+        thread_count: usize,
+        path_map: HashMap<u64, Vec<PathBuf>>,
+    ) -> HashMap<usize, HashMap<u64, Vec<PathBuf>>> {
+        let mut thread_path_map: HashMap<usize, HashMap<u64, Vec<PathBuf>>> =
+            HashMap::new();
+
+        for index in 0..thread_count {
+            thread_path_map.insert(index, HashMap::new());
+        }
+
+        for (index, entry) in path_map.into_iter().enumerate() {
+            let (file_length, paths) = entry;
+            let thread_position = index % thread_count;
+
+            let map = thread_path_map.get_mut(&thread_position).unwrap();
+            map.insert(file_length, paths);
+        }
+
+        return thread_path_map;
+    }
+
 }
 
 // Piece Writer
