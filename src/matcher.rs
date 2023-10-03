@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
-    path::PathBuf
+    path::PathBuf, collections::HashSet
 };
 
 use crate::{
@@ -17,7 +17,7 @@ pub struct PieceMatchResult {
 
 pub struct MultiFilePieceMatcher;
 impl MultiFilePieceMatcher {
-    pub fn count_choices(finder: &LengthFileFinder, piece: &Piece) -> Option<usize> {
+    pub fn count_choices(finder: &LengthFileFinder, piece: &Piece) -> usize {
         let mut result: usize = if piece.files.len() == 0 { 0 } else { 1 };
 
         for piece_file in &piece.files {
@@ -25,22 +25,17 @@ impl MultiFilePieceMatcher {
 
             result = match result.checked_mul(files.len()) {
                 Some(new_result) => new_result,
-                None => return None,
+                None => return usize::MAX,
             };
         }
 
-        Some(result)
+        return result;
     }
 
     pub fn scan(
         finder: &LengthFileFinder,
         piece: &Piece,
     ) -> Result<Option<PieceMatchResult>, std::io::Error> {
-        let count_choices = MultiFilePieceMatcher::count_choices(finder, &piece);
-        if count_choices.is_none() {
-            return Ok(None);
-        }
-
         let mut paths: Vec<&PathBuf> = Vec::new();
         let mut bytes: Vec<u8> = Vec::new();
 
@@ -65,12 +60,31 @@ impl MultiFilePieceMatcher {
         let piece_file = piece.files.get(paths.len()).unwrap();
         let entries = finder.find_length(piece_file.file_length);
 
+        // TODO: Accounting. We need to make count_choices return the correct
+        // deduplicated count with the optimization of not hashing entries we've seen.
+        let mut seen: HashSet<String> = HashSet::new();
+        let should_deduplicate = entries.len() > 1;
+
         for entry in entries {
             let read_buffer = MultiFilePieceMatcher::read_bytes(
                 entry,
                 piece_file.read_length,
                 piece_file.read_start_position,
             )?;
+
+            // TODO: Hoist this check somewhere else.
+            // We can filter ahead of time and not have to do this in a loop.
+            if should_deduplicate {
+                let hash = {
+                    let mut hasher = Sha1::new();
+                    hasher.input(&read_buffer);
+                    hasher.result_str()
+                };
+                
+                if !seen.insert(hash) {
+                    continue;
+                }
+            }
 
             let previous_buffer_length = buffer.len();
             buffer.extend(read_buffer);

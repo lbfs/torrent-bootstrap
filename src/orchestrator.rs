@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom, Write, BufReader},
     path::{Path, PathBuf},
     time::Instant, thread::{self, JoinHandle}, sync::{Arc, Mutex},
 };
@@ -15,9 +15,8 @@ use crate::{
     torrent::{Piece, Torrent},
 };
 
-#[derive(Clone)]
 pub struct OrchestratorOptions {
-    pub torrents_paths: Vec<PathBuf>,
+    pub torrents: Vec<Torrent>,
     pub scan_directories: Vec<PathBuf>,
     pub export_directory: PathBuf,
     pub threads: usize,
@@ -32,45 +31,46 @@ pub struct OrchestratorPiece {
 pub struct Orchestrator;
 impl Orchestrator {
     pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
+        use std::cmp::max;
         let now = Instant::now();
 
-        // Load all the torrents!
-        let torrents = Orchestrator::load_torrents(options);
+        // Setup the finders
+        let finder = Orchestrator::setup_finder(options, &options.torrents);
         println!(
-            "All torrents loaded and finished at {} seconds.",
-            now.elapsed().as_secs()
-        );
-        
-        
-        // Setup the finder
-        let finder = Orchestrator::setup_finder(options, &torrents);
-        println!(
-            "Finder finished caching and finished at {} seconds.",
+            "File finder finished caching and finished at {} seconds.",
             now.elapsed().as_secs()
         );
 
         // "Pre-allocate" all the files on the disk so we have some place to write to
-        Orchestrator::setup_export(options, &torrents)?;
+        Orchestrator::setup_export(options, &options.torrents)?;
         println!(
             "Generating export finished at {} seconds.",
             now.elapsed().as_secs()
         );
 
-        // Deduplicate
-        let finder = Orchestrator::deduplicate(finder, options)?;
-        println!(
-            "Finder de-duplication finished at {} seconds.",
-            now.elapsed().as_secs()
+        let mut piece_count = 0;
+        for torrent in &options.torrents {
+            piece_count += torrent.pieces.len()
+        }
+
+        // TODO: Fix cache size
+        let max_threads = max(1, options.threads);
+        let writer = Arc::new(
+            PieceWriter::new(
+                max_threads * 2, 
+                options.export_directory.clone(), 
+                piece_count
+            )
         );
 
         // Start!
-        SingleFileOrchestrator::start(options, &torrents, &finder)?;
+        SingleFileOrchestrator::start(options, &options.torrents, &finder, &writer)?;
         println!(
             "Single File Orchestrator finished at {} seconds.",
             now.elapsed().as_secs()
         );
 
-        MultiFileOrchestrator::start(options, &torrents, &finder)?;
+        MultiFileOrchestrator::start(options, &options.torrents, &finder, &writer)?;
         println!(
             "Multi File Orchestrator finished at {} seconds.",
             now.elapsed().as_secs()
@@ -83,33 +83,6 @@ impl Orchestrator {
         );
 
         Ok(())
-    }
-
-    fn load_torrents(options: &OrchestratorOptions) -> Vec<Torrent> {
-        let mut existence: HashSet<String> = HashSet::new();
-        let mut torrents = Vec::new();
-
-        for path in &options.torrents_paths {
-            match Torrent::from(path.as_path()) {
-                Ok(torrent) => {
-                    if existence.contains(&torrent.info_hash) {
-                        continue;
-                    }
-
-                    existence.insert(torrent.info_hash.clone());
-                    torrents.push(torrent);
-                }
-                Err(error) => {
-                    println!(
-                        "Failed to open torrent file at {} with error {}",
-                        path.to_str().unwrap(),
-                        error.to_string()
-                    );
-                }
-            }
-        }
-
-        return torrents;
     }
 
     fn setup_export(
@@ -148,6 +121,7 @@ impl Orchestrator {
 
     fn setup_finder(options: &OrchestratorOptions, torrents: &[Torrent]) -> LengthFileFinder {
         let mut file_lengths: Vec<u64> = Vec::new();
+
         for torrent in torrents {
             for piece in &torrent.pieces {
                 for file in &piece.files {
@@ -189,130 +163,39 @@ impl Orchestrator {
 
         Ok(())
     }
-
-    fn deduplicate(finder: LengthFileFinder, options: &OrchestratorOptions) -> Result<LengthFileFinder, std::io::Error> {
-        // Get original file count for logging purposes
-        let mut original_count = 0;
-        for value in finder.cache.values() {
-            original_count += value.len();
-        }
-
-        // Seperate entries based on what actually needs to be de-duplicated!
-        let mut original: HashMap<u64, Vec<PathBuf>> = finder.cache;
-        let mut updated: HashMap<u64, Vec<PathBuf>> = HashMap::new();
-
-        let keys: Vec<u64> = original.keys().cloned().collect();
-        for key in keys {
-            let values = original.get(&key).unwrap();
-            if values.len() <= 1 {
-                updated.insert(key, original.remove(&key).unwrap());
-            }
-        }
-
-        // Perform the actual de-duplication
-        let work = Orchestrator::partition_work_by_thread(options.threads, original);
-        let mut handles: Vec<JoinHandle<Result<HashMap<u64, Vec<PathBuf>>, std::io::Error>>> = Vec::with_capacity(options.threads);
-        for (_, entry) in work {
-            let handle: JoinHandle<Result<HashMap<u64, Vec<PathBuf>>, std::io::Error>> = thread::spawn(move || {
-                let mut unique: HashMap<u64, Vec<PathBuf>> = HashMap::new();
-
-                for (file_length, paths) in entry {
-                    let mut existence: HashSet<String> = HashSet::new();
-                    let mut found: Vec<PathBuf> = Vec::new();
-
-                    for path in paths {
-                        // Open the entire file
-                        let mut input = File::open(&path)?;
-                        let mut buffer = Vec::new();
-                        input.read_to_end(&mut buffer)?;
-
-                        // Generate the hash
-                        let mut context = Sha256::new();
-                        context.input(&buffer);
-                        let hash = context.result_str();
-
-                        if !existence.contains(&hash) {
-                            found.push(path);
-                            existence.insert(hash);
-                        }
-                    }
-
-                    if found.len() > 0 {
-                        unique.insert(file_length, found);
-                    }   
-                }
-
-                Ok(unique)
-            });
-
-            handles.push(handle);
-        }
-
-        for handle in handles {
-            let result = handle.join().unwrap().unwrap();
-            updated.extend(result);
-        }
-
-        // Get updated file count for logging purposes
-        let mut updated_count = 0;
-        for value in updated.values() {
-            updated_count += value.len();
-        }
-
-        // Update the finder
-        let mut finder = LengthFileFinder::new();
-        finder.cache = updated;
-
-        // Print and return
-        println!("File de-duplication removed {} and kept {} files in the cache.", original_count - updated_count, updated_count);
-        return Ok(finder);
-    }
-
-    fn partition_work_by_thread(
-        thread_count: usize,
-        path_map: HashMap<u64, Vec<PathBuf>>,
-    ) -> HashMap<usize, HashMap<u64, Vec<PathBuf>>> {
-        let mut thread_path_map: HashMap<usize, HashMap<u64, Vec<PathBuf>>> =
-            HashMap::new();
-
-        for index in 0..thread_count {
-            thread_path_map.insert(index, HashMap::new());
-        }
-
-        for (index, entry) in path_map.into_iter().enumerate() {
-            let (file_length, paths) = entry;
-            let thread_position = index % thread_count;
-
-            let map = thread_path_map.get_mut(&thread_position).unwrap();
-            map.insert(file_length, paths);
-        }
-
-        return thread_path_map;
-    }
-
 }
 
 // Piece Writer
-struct PieceWriter {
+struct PieceState {
     fd_cache: LruHashMap<PathBuf, File>,
-    options: OrchestratorOptions
+    written_pieces: usize,
+    total_piece_count: usize
+}
+
+struct PieceWriter {
+    state: Mutex<PieceState>,
+    export_directory: PathBuf
 }
 
 impl PieceWriter {
-    pub fn new(cache_size: usize, options: OrchestratorOptions) -> PieceWriter {
+    pub fn new(cache_size: usize, export_directory: PathBuf, total_piece_count: usize) -> PieceWriter {
         use std::cmp::max;
         let capacity = max(cache_size, 2);
 
         return PieceWriter {
-            fd_cache: LruHashMap::new(capacity),
-            options: options,
+            state: Mutex::new(PieceState {
+                fd_cache: LruHashMap::new(capacity),
+                written_pieces: 0,
+                total_piece_count: total_piece_count
+            }),
+            export_directory: export_directory
         };
     }
 
-    pub fn write(&mut self, orchestrator_piece: OrchestratorPiece) -> Result<(), std::io::Error> {
+    pub fn write(&self, orchestrator_piece: OrchestratorPiece) -> Result<(), std::io::Error> {
         let piece = &orchestrator_piece.piece;
         let export_directory: PathBuf = [
-            self.options.export_directory.to_path_buf(),
+            self.export_directory.clone(),
             Path::new(&orchestrator_piece.torrent_hash).to_path_buf(),
             Path::new("Data").to_path_buf(),
         ]
@@ -321,18 +204,20 @@ impl PieceWriter {
 
         match &orchestrator_piece.result {
             Some(result) => {
+                let mut state = self.state.lock().unwrap();
                 let mut start_position = 0;
+
                 for piece_file in &piece.files {
                     let output_path: PathBuf =
                         Path::new(&export_directory).join(Path::new(&piece_file.file_path));
 
                     // Is this correct?
-                    let handle = match self.fd_cache.get_mut(&output_path) {
+                    let handle = match state.fd_cache.get_mut(&output_path) {
                         Some(handle) => handle,
                         None => {
                             let handle = OpenOptions::new().write(true).open(&output_path)?;
-                            self.fd_cache.push(output_path.clone(), handle);
-                            self.fd_cache.get_mut(&output_path).unwrap()
+                            state.fd_cache.push(output_path.clone(), handle);
+                            state.fd_cache.get_mut(&output_path).unwrap()
                         }
                     };
 
@@ -348,6 +233,10 @@ impl PieceWriter {
 
                     start_position = end_position;
                 }
+
+                state.written_pieces += 1;
+
+                println!("{} of {} total pieces written", state.written_pieces, state.total_piece_count);
             }
             _ => {}
         };
@@ -363,6 +252,7 @@ impl SingleFileOrchestrator {
         options: &OrchestratorOptions,
         torrents: &[Torrent],
         finder: &LengthFileFinder,
+        writer: &Arc<PieceWriter>
     ) -> Result<(), std::io::Error> {
         use std::cmp::min;
 
@@ -375,14 +265,14 @@ impl SingleFileOrchestrator {
 
         for (_, map) in work {
             let finder = finder.clone();
-            let options = options.clone();
+            let writer = writer.clone();
 
             let handle = thread::spawn(move || {
                 let map = map;
                 let finder = finder;
 
                 for (file_length, pieces) in map {
-                    SingleFileOrchestrator::process(file_length, pieces, &finder, &options)?;
+                    SingleFileOrchestrator::process(file_length, pieces, &finder, &writer)?;
                 }
 
                 Ok(())
@@ -403,17 +293,10 @@ impl SingleFileOrchestrator {
         file_length: u64,
         mut pieces: Vec<OrchestratorPiece>,
         finder: &LengthFileFinder,
-        options: &OrchestratorOptions,
+        writer: &PieceWriter
     ) -> Result<(), std::io::Error> {
-        let cache_size = SingleFileOrchestrator::count_torrents_in_pieces(&pieces);
-        let mut writer = PieceWriter::new(cache_size, options.clone());
 
         for path in finder.find_length(file_length) {
-            // Read file
-            let mut input = File::open(path)?;
-            let mut buffer = Vec::new();
-            input.read_to_end(&mut buffer).unwrap();
-
             // Get length so we can track where are as we mutate list
             let pieces_length = pieces.len();
 
@@ -424,11 +307,9 @@ impl SingleFileOrchestrator {
                 let file = piece.piece.files.get(0).unwrap();
 
                 let read_start_position = file.read_start_position as usize;
-                let read_final_position = read_start_position + file.read_length as usize;
-
-                let bytes = &buffer[read_start_position..read_final_position];
+                let bytes = SingleFileOrchestrator::read_bytes(path, file.read_length, read_start_position as u64)?;
                 let mut hasher = Sha1::new();
-                hasher.input(bytes);
+                hasher.input(&bytes);
 
                 if hasher.result_str() == piece.piece.piece_hash {
                     let bytes = bytes.to_vec();
@@ -518,16 +399,19 @@ impl SingleFileOrchestrator {
         return thread_piece_map;
     }
 
-    fn count_torrents_in_pieces(pieces: &[OrchestratorPiece]) -> usize {
-        let mut seen: HashSet<String> = HashSet::new();
+    // TODO: Cleanup duplicate code
+    fn read_bytes(
+        path: &PathBuf,
+        read_length: u64,
+        read_start_position: u64,
+    ) -> Result<Vec<u8>, std::io::Error> {
+        let mut read_bytes = vec![0u8; read_length as usize];
+        let mut handle = File::open(path)?;
 
-        for piece in pieces {
-            if !seen.contains(&piece.torrent_hash) {
-                seen.insert(piece.torrent_hash.clone());
-            }
-        }
+        handle.seek(SeekFrom::Start(read_start_position))?;
+        handle.read_exact(&mut read_bytes)?;
 
-        return seen.len();
+        return Ok(read_bytes);
     }
 }
 
@@ -538,6 +422,7 @@ impl MultiFileOrchestrator {
         options: &OrchestratorOptions,
         torrents: &[Torrent],
         finder: &LengthFileFinder,
+        writer: &Arc<PieceWriter>,
     ) -> Result<(), std::io::Error> {
         use std::cmp::min;
 
@@ -547,7 +432,6 @@ impl MultiFileOrchestrator {
         MultiFileOrchestrator::sort_by_combinations(&mut pieces, finder);
 
         let work = MultiFileOrchestrator::partition_work_by_thread(thread_count, pieces);
-        let writer = Arc::new(Mutex::new(PieceWriter::new(1, options.clone())));
         let mut handles: Vec<JoinHandle<Result<(), std::io::Error>>> = Vec::new();
 
         for (_, pieces) in work {
@@ -556,10 +440,9 @@ impl MultiFileOrchestrator {
             
             let handle = thread::spawn(move || {
                 let pieces = pieces;
-                let mut writer = writer;
 
                 for piece in pieces {
-                    MultiFileOrchestrator::process(piece, &mut writer, &finder)?;
+                    MultiFileOrchestrator::process(piece, &writer, &finder)?;
                 }
 
                 Ok(())
@@ -575,10 +458,10 @@ impl MultiFileOrchestrator {
         Ok(())
     }
 
-    fn process(mut piece: OrchestratorPiece, writer: &mut Arc<Mutex<PieceWriter>>, finder: &LengthFileFinder) -> Result<(), std::io::Error> {
+    fn process(mut piece: OrchestratorPiece, writer: &Arc<PieceWriter>, finder: &LengthFileFinder) -> Result<(), std::io::Error> {
+        println!("Multipiece matcher count {}", MultiFilePieceMatcher::count_choices(finder, &piece.piece));
         piece.result = MultiFilePieceMatcher::scan(finder, &piece.piece)?;
 
-        let mut writer = writer.lock().unwrap();
         writer.write(piece)
     }
 
@@ -603,15 +486,9 @@ impl MultiFileOrchestrator {
     }
 
     fn sort_by_combinations(pieces: &mut [OrchestratorPiece], finder: &LengthFileFinder) {
-        let count_fn = |piece: &OrchestratorPiece| {
-            let res = MultiFilePieceMatcher::count_choices(finder, &piece.piece);
-            let value = if let Some(res) = res { res } else { usize::MAX };
-            return value;
-        };
-
         pieces.sort_by(|left, right| {
-            let left_count = count_fn(left);
-            let right_count = count_fn(right);
+            let left_count = MultiFilePieceMatcher::count_choices(finder, &left.piece);
+            let right_count = MultiFilePieceMatcher::count_choices(finder, &right.piece);
 
             left_count.partial_cmp(&right_count).unwrap()
         });
