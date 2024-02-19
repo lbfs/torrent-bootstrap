@@ -7,6 +7,8 @@ use serde::{ser::{SerializeMap, SerializeSeq}, Serialize};
  * Lists are encoded as an 'l' followed by their elements (also bencoded) followed by an 'e'. For example l4:spam4:eggse corresponds to ['spam', 'eggs'].
  * Dictionaries are encoded as a 'd' followed by a list of alternating keys and their corresponding values followed by an 'e'. For example, d3:cow3:moo4:spam4:eggse corresponds to {'cow': 'moo', 'spam': 'eggs'} and d4:spaml1:a1:bee corresponds to {'spam': ['a', 'b']}. Keys must be strings and appear in sorted order (sorted as raw strings, not alphanumerics).
 */
+
+#[derive(Debug)]
 pub struct BencodeString {
     pub value: Vec<u8>,
     pub start_position: usize,
@@ -28,6 +30,7 @@ impl Serialize for BencodeString {
     }
 }
 
+#[derive(Debug)]
 pub struct BencodeInteger {
     pub value: i64,
     pub start_position: usize,
@@ -44,7 +47,7 @@ impl Serialize for BencodeInteger {
     }
 }
 
-
+#[derive(Debug)]
 pub struct BencodeList {
     pub value: Vec<BencodeToken>,
     pub start_position: usize,
@@ -65,6 +68,7 @@ impl Serialize for BencodeList {
     }
 }
 
+#[derive(Debug)]
 pub struct BencodeDictionary {
     pub value: Vec<(BencodeString, BencodeToken)>,
     pub start_position: usize,
@@ -85,10 +89,12 @@ impl Serialize for BencodeDictionary {
     }
 }
 
+#[derive(Debug)]
 pub enum BencodeError {
     ValidationException(String)
 }
 
+#[derive(Debug)]
 pub enum BencodeToken {
     String(BencodeString),
     List(BencodeList),
@@ -156,7 +162,7 @@ impl Bencode {
                     evaluated_size = (evaluated_size * 10) + (bytes[position] - b'0') as usize;
                     position += 1;
                 }
-                b':' if position > 0 => {
+                b':' if position > start_position => {
                     position += 1;
                     break;
                 },
@@ -211,7 +217,7 @@ impl Bencode {
                     result_sign = -1;
                     position += 1;
                 },
-                b'0'..=b'9' => {
+                b'0'..=b'9' if position > start_position => {
                     let number = (byte - b'0') as i64;
     
                     if first_digit.is_none() {
@@ -259,7 +265,7 @@ impl Bencode {
                 b'l' if position == start_position => {
                     position += 1;
                 }
-                b'0'..=b'9' | b'i' | b'l' | b'd' => {
+                b'0'..=b'9' | b'i' | b'l' | b'd' if position > start_position => {
                     let token = Bencode::decode_at_position(bytes, position)?;
                     position = Bencode::get_continuation_position(&token);
                     tokens.push(token);
@@ -296,12 +302,12 @@ impl Bencode {
                 b'd' if position == start_position => {
                     position += 1;
                 }
-                b'0'..=b'9' if key_seen.is_none() => {
+                b'0'..=b'9' if key_seen.is_none() && position > start_position => {
                     let token = Bencode::decode_string(bytes, position)?;
                     position = token.continuation_position;
                     key_seen = Some(token);
                 },
-                b'0'..=b'9' | b'i' | b'l' | b'd' if key_seen.is_some() => {
+                b'0'..=b'9' | b'i' | b'l' | b'd' if key_seen.is_some() && position > start_position => {
                     let value = Bencode::decode_at_position(bytes, position)?;
                     let key = key_seen.take().unwrap();
                     position = Bencode::get_continuation_position(&value);

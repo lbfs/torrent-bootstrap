@@ -98,7 +98,7 @@ impl Torrent {
         };
 
         let value = serde_json::to_value(tokens)
-            .expect("Unable to convert bencoded tokens to serde value.");
+            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err.to_string()))?;   
 
         let torrent: IntermediateTorrent = serde_json::from_value(value)
             .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err.to_string()))?;       
@@ -121,8 +121,9 @@ impl Torrent {
         let lower_bound = (total_size as f64 / torrent.info.piece_length as f64).floor() as u64;
         let pieces_count = (torrent.info.pieces.len() as f64 / 20.0).ceil() as u64;
 
-        if !(lower_bound < pieces_count && pieces_count <= upper_bound) {
+        if !(lower_bound < pieces_count && pieces_count <= upper_bound) && !(lower_bound == pieces_count && pieces_count == upper_bound) {
             // Make sure there is a final hash (even if not complete, within this bound, it should never be equal or lower to the lower bound.)
+            // However, if there is an equal divisor, then upper and lower bound should be identical to number of pieces.
             return Err(std::io::Error::new(ErrorKind::InvalidData, "Piece count does not fall with-in the expected piece boundary. This torrent is malformed."))
         }
 
