@@ -1,12 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write, BufReader},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::Instant, thread::{self, JoinHandle}, sync::{Arc, Mutex},
 };
 
-use crypto::{digest::Digest, sha1::Sha1, sha2::Sha256};
+use crypto::{digest::Digest, sha1::Sha1};
 use lrumap::LruHashMap;
 
 use crate::{

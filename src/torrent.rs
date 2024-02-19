@@ -1,9 +1,37 @@
-use lava_torrent::torrent::v1::Torrent as LavaTorrent;
-use std::{
-    fmt::Write,
-    io::ErrorKind,
-    path::{Path, PathBuf},
-};
+use std::{fmt::Write, io::ErrorKind, path::{Path, PathBuf}};
+
+use crypto::{digest::Digest, sha1::Sha1};
+use serde::Deserialize;
+use crate::bencode::{Bencode, BencodeToken};
+
+#[derive(Debug, Deserialize, Clone)]
+struct IntermediateFile {
+    length: i64,
+    path: Vec<String>
+}
+
+#[derive(Debug, Deserialize)]
+struct IntermediateInfo {
+    files: Option<Vec<IntermediateFile>>,
+    name: String,
+    #[serde(alias = "piece length")]
+    piece_length: i64,
+    pieces: Vec<u8>,
+    length: Option<i64>
+}
+
+#[derive(Debug, Deserialize)]
+struct IntermediateTorrent {
+    info: IntermediateInfo
+}
+
+// TODO: This will require a bigger refactor, let's create an intermediary Torrent type that models the actual file, but then report the original structure
+// when lava torrent was still in-place.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct File {
+    pub length: u64,
+    pub path: PathBuf
+}
 
 #[derive(Debug, Clone)]
 pub struct PieceFile {
@@ -30,62 +58,112 @@ pub struct Torrent {
     pub path: PathBuf
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct File {
-    pub length: u64,
-    pub path: PathBuf,
-}
-
 impl Torrent {
     pub fn from(path: &Path) -> Result<Torrent, std::io::Error> {
-        let lava_torrent = Torrent::load_torrent(path)?;
+        let bytes = std::fs::read(path)
+            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err.to_string()))?;       
 
-        // Map lava_torrent Files to internal File structure
-        let files = Torrent::format_files(&lava_torrent);
-
-        // Get the overall metadata for this torrent
-        let info_hash = lava_torrent.info_hash();
-
-        // Build our final torrent object
-        let mut torrent = Torrent {
-            files: files,
-            pieces: Vec::new(),
-            piece_length: 0,
-            info_hash: info_hash,
-            path: path.to_path_buf()
+        let tokens = match Bencode::decode(&bytes) {
+            Ok(tokens) => tokens,
+            Err(_) => return Err(std::io::Error::new(ErrorKind::InvalidData, "Unable to decode bencoded data."))
         };
 
-        // Generate file read boundries and hashes for individual hashes
-        torrent.pieces = Torrent::construct_pieces(&lava_torrent, &torrent.files);
-        torrent.piece_length = torrent.pieces.len();
+        // TODO: Find a way to remove this...? I don't like having to reference the underlying structure when we're going to deserialize it...
+        let info_hash = {
+            let value = match &tokens {
+                BencodeToken::Dictionary(root) => {
+                    let info = &root.value;
+                    let found = info
+                        .iter()
+                        .find(|key| key.0.value.as_slice().cmp("info".as_bytes()).is_eq());
 
-        Ok(torrent)
-    }
+                    if found.is_none() {
+                        Err(std::io::Error::new(ErrorKind::InvalidData, "Info token is not in dictionary."))
+                    } else {
+                        let (_, value) = found.unwrap();
+                        match value {
+                            BencodeToken::Dictionary(info) => {
+                                let mut hasher = Sha1::new();
+                                hasher.input(&bytes[info.start_position..=info.end_position]);
+                                Ok(hasher.result_str())
+                            },
+                            _ => Err(std::io::Error::new(ErrorKind::InvalidData, "Info token is not a dictionary."))
+                        }
+                    }
+                },
+                _ => Err(std::io::Error::new(ErrorKind::InvalidData, "Root token is not a dictionary."))
+            };
 
-    fn load_torrent(path: &Path) -> Result<LavaTorrent, std::io::Error> {
-        let torrent = LavaTorrent::read_from_file(path)
-            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err.to_string()))?;
+            value?
+        };
 
-        Ok(torrent)
-    }
+        let value = serde_json::to_value(tokens)
+            .expect("Unable to convert bencoded tokens to serde value.");
 
-    fn format_content_layout(lava_torrent: &LavaTorrent, file_path: Option<&Path>) -> PathBuf {
-        let mut path = PathBuf::from(&lava_torrent.name);
+        let torrent: IntermediateTorrent = serde_json::from_value(value)
+            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err.to_string()))?;       
 
-        if let Some(file_path) = file_path {
-            path.push(file_path);
+        let total_size: u64 = match &torrent.info.files {
+            Some(multiple) => {
+                multiple.iter()
+                    .map(|file| file.length as u64)
+                    .sum()
+            },
+            None => {
+                match torrent.info.length {
+                    Some(length) => length as u64,
+                    None => return Err(std::io::Error::new(ErrorKind::InvalidData, "Unable to detect total file length in torrent."))
+                }
+            }
+        };
+
+        let upper_bound = (total_size as f64 / torrent.info.piece_length as f64).ceil() as u64;
+        let lower_bound = (total_size as f64 / torrent.info.piece_length as f64).floor() as u64;
+        let pieces_count = (torrent.info.pieces.len() as f64 / 20.0).ceil() as u64;
+
+        if !(lower_bound < pieces_count && pieces_count <= upper_bound) {
+            // Make sure there is a final hash (even if not complete, within this bound, it should never be equal or lower to the lower bound.)
+            return Err(std::io::Error::new(ErrorKind::InvalidData, "Piece count does not fall with-in the expected piece boundary. This torrent is malformed."))
         }
 
-        path
+        let piece_hashes: Vec<Vec<u8>> = torrent.info.pieces
+            .chunks(20)
+            .map(|slice| slice.to_vec())
+            .collect();
+
+        let files = Torrent::format_files(&torrent, total_size);
+        let pieces = Torrent::construct_pieces(&piece_hashes, &files, &torrent);
+        let pieces_len = pieces.len();
+
+        Ok(Torrent {
+            files: files,
+            pieces: pieces,
+            piece_length: pieces_len, // this is wrong..., rename this when we refactor,
+            info_hash: info_hash,
+            path: path.to_path_buf()
+        })
     }
 
-    fn format_files(lava_torrent: &LavaTorrent) -> Vec<File> {
-        match lava_torrent.files.clone() {
+    fn format_content_layout(torrent: &IntermediateTorrent, paths: Option<&PathBuf>) -> PathBuf {
+        let mut content_path = PathBuf::from(&torrent.info.name);
+
+        if let Some(paths) = paths {
+            for path  in paths {
+                content_path.push(Path::new(path));
+            } 
+        }
+
+        content_path
+    }
+
+    fn format_files(torrent: &IntermediateTorrent, total_length: u64) -> Vec<File> {
+        let files = torrent.info.files.clone();
+        let files = match files {
             Some(files) => {
-                files.into_iter().map(|lava_file| {
+                files.into_iter().map(|file| {
                     File {
-                        path: Torrent::format_content_layout(lava_torrent, Some(&lava_file.path)),
-                        length: lava_file.length as u64,
+                        path: Torrent::format_content_layout(torrent, Some(&file.path.iter().collect())),
+                        length: file.length as u64,
                     }
                 })
                 .collect()
@@ -93,16 +171,18 @@ impl Torrent {
             None => {
                 let mut files = Vec::new();
                 files.push(File {
-                    path: Torrent::format_content_layout(lava_torrent, None),
-                    length: lava_torrent.length as u64,
+                    path: Torrent::format_content_layout(torrent, None),
+                    length: total_length
                 });
                 files
             }
-        }
-    }
+        };
 
-    fn get_sha1_hexdigest(torrent: &LavaTorrent, index: usize) -> String {
-        let bytes = torrent.pieces.get(index).unwrap();
+
+        files
+    }
+    
+    fn get_sha1_hexdigest(bytes: &[u8]) -> String {
         let mut output = String::new();
         for byte in bytes {
             write!(&mut output, "{:02x?}", byte).expect("Unable to write");
@@ -110,10 +190,10 @@ impl Torrent {
         output
     }
 
-    fn construct_pieces(lava_torrent: &LavaTorrent, files: &Vec<File>) -> Vec<Piece> {
-        let piece_length = lava_torrent.piece_length as u64;
-        let piece_count = lava_torrent.pieces.len();
-        let mut pieces: Vec<Piece> = Vec::with_capacity(piece_count);
+    fn construct_pieces(piece_hashes: &Vec<Vec<u8>>, files: &Vec<File>, torrent: &IntermediateTorrent) -> Vec<Piece> {
+        let piece_length = torrent.info.piece_length;
+
+        let mut pieces: Vec<Piece> = Vec::with_capacity(piece_hashes.len());
 
         let file_count = files.len();
 
@@ -123,11 +203,11 @@ impl Torrent {
             file_remaining_lengths.push(file.length);
         }
 
-        while pieces.len() < piece_count {
+        while pieces.len() < piece_hashes.len() {
             let mut piece_files: Vec<PieceFile> = Vec::new();
-            let mut piece_counted_length = 0;
+            let mut piece_counted_length: u64 = 0;
 
-            while piece_counted_length < piece_length {
+            while piece_counted_length < piece_length as u64 {
                 if file_index == file_count {
                     break;
                 }
@@ -135,10 +215,10 @@ impl Torrent {
                 let current_file = &files[file_index];
                 let mut current_remaining = file_remaining_lengths[file_index];
 
-                let remainder = piece_length - piece_counted_length;
+                let remainder = piece_length as u64 - piece_counted_length;
                 if current_remaining >= remainder {
                     current_remaining -= remainder;
-                    piece_counted_length = piece_length;
+                    piece_counted_length = piece_length as u64;
                 } else {
                     piece_counted_length += current_remaining;
                     current_remaining = 0;
@@ -149,7 +229,7 @@ impl Torrent {
                         as u64,
                     read_length: (file_remaining_lengths[file_index] - current_remaining) as u64,
                     file_length: current_file.length as u64,
-                    file_path: current_file.path.clone(),
+                    file_path: current_file.path.clone()
                 });
 
                 file_remaining_lengths[file_index] = current_remaining;
@@ -166,7 +246,7 @@ impl Torrent {
             pieces.push(Piece {
                 position: pieces.len(),
                 files: piece_files,
-                piece_hash: Torrent::get_sha1_hexdigest(&lava_torrent, pieces.len()),
+                piece_hash: Torrent::get_sha1_hexdigest(&piece_hashes[pieces.len()]) ,
                 length: total_length,
             })
         }

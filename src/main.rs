@@ -9,6 +9,7 @@ mod matcher;
 mod finder;
 mod torrent;
 mod orchestrator;
+mod bencode;
 
 fn load_torrents(torrent_paths: &Vec<PathBuf>) -> Vec<Torrent> {
     let mut existence: HashSet<String> = HashSet::new();
