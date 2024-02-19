@@ -1,42 +1,94 @@
-// Notes: https://www.bittorrent.org/beps/bep_0003.html#bencoding
-#[derive(Debug)]
+use serde::{ser::{SerializeMap, SerializeSeq}, Serialize};
+
+/**
+ * Reference: http://bittorrent.org/beps/bep_0003.html
+ * Strings are length-prefixed base ten followed by a colon and the string. For example 4:spam corresponds to 'spam'.
+ * Integers are represented by an 'i' followed by the number in base 10 followed by an 'e'. For example i3e corresponds to 3 and i-3e corresponds to -3. Integers have no size limitation. i-0e is invalid. All encodings with a leading zero, such as i03e, are invalid, other than i0e, which of course corresponds to 0.
+ * Lists are encoded as an 'l' followed by their elements (also bencoded) followed by an 'e'. For example l4:spam4:eggse corresponds to ['spam', 'eggs'].
+ * Dictionaries are encoded as a 'd' followed by a list of alternating keys and their corresponding values followed by an 'e'. For example, d3:cow3:moo4:spam4:eggse corresponds to {'cow': 'moo', 'spam': 'eggs'} and d4:spaml1:a1:bee corresponds to {'spam': ['a', 'b']}. Keys must be strings and appear in sorted order (sorted as raw strings, not alphanumerics).
+*/
 pub struct BencodeString {
     pub value: Vec<u8>,
-    start_position: usize,
-    end_position: usize,
+    pub start_position: usize,
+    pub end_position: usize,
     continuation_position: usize
 }
 
-#[derive(Debug)]
+impl Serialize for BencodeString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer, 
+    {
+        // Ideally we always keep this bytes, but for simplicity let's try to make a UTF-8 string where possible.
+        // Otherwise, it is a massive pain in the ass to move this data around.
+        match String::from_utf8(self.value.clone()) {
+            Ok(output) => serializer.serialize_str(&output),
+            Err(_) => serializer.serialize_bytes(&self.value),
+        }
+    }
+}
+
 pub struct BencodeInteger {
-    pub value: isize,
-    start_position: usize,
-    end_position: usize,
+    pub value: i64,
+    pub start_position: usize,
+    pub end_position: usize,
     continuation_position: usize
 }
 
-#[derive(Debug)]
+impl Serialize for BencodeInteger {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer, 
+    {
+        serializer.serialize_i64(self.value as i64)
+    }
+}
+
+
 pub struct BencodeList {
     pub value: Vec<BencodeToken>,
-    start_position: usize,
-    end_position: usize,
+    pub start_position: usize,
+    pub end_position: usize,
     continuation_position: usize
 }
 
-#[derive(Debug)]
+impl Serialize for BencodeList {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer, 
+    {
+        let mut s = serializer.serialize_seq(Some(self.value.len()))?;
+        for token in &self.value {
+            s.serialize_element(token)?
+        }
+        s.end()
+    }
+}
+
 pub struct BencodeDictionary {
     pub value: Vec<(BencodeString, BencodeToken)>,
-    start_position: usize,
-    end_position: usize,
+    pub start_position: usize,
+    pub end_position: usize,
     continuation_position: usize
 }
 
-#[derive(Debug)]
+impl Serialize for BencodeDictionary {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer, 
+    {
+        let mut s = serializer.serialize_map(Some(self.value.len()))?;
+        for (token_key, token_value) in &self.value {
+            s.serialize_entry(token_key, token_value)?
+        }
+        s.end()
+    }
+}
+
 pub enum BencodeError {
     ValidationException(String)
 }
 
-#[derive(Debug)]
 pub enum BencodeToken {
     String(BencodeString),
     List(BencodeList),
@@ -44,6 +96,19 @@ pub enum BencodeToken {
     Dictionary(BencodeDictionary)
 }
 
+impl Serialize for BencodeToken {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer, 
+    {
+        match self {
+            BencodeToken::String(value) => value.serialize(serializer),
+            BencodeToken::List(value) => value.serialize(serializer),
+            BencodeToken::Integer(value) => value.serialize(serializer),
+            BencodeToken::Dictionary(value) => value.serialize(serializer),
+        }
+    }
+}
 
 pub struct Bencode;
 impl Bencode {
@@ -127,10 +192,10 @@ impl Bencode {
     fn decode_integer(bytes: &[u8], start_position: usize) -> Result<BencodeInteger, BencodeError> {
         let mut position: usize = start_position;
     
-        let mut result: isize = 0;
-        let mut result_sign: isize = 1;
-    
-        let mut first_digit: Option<isize> = None;
+        let mut result: i64 = 0;
+        let mut result_sign: i64 = 1;
+
+        let mut first_digit: Option<i64> = None;
     
         loop {
             if position >= bytes.len() {
@@ -147,7 +212,7 @@ impl Bencode {
                     position += 1;
                 },
                 b'0'..=b'9' => {
-                    let number = (byte - b'0') as isize;
+                    let number = (byte - b'0') as i64;
     
                     if first_digit.is_none() {
                         if result_sign == -1 && number == 0 {
