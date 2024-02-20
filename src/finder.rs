@@ -18,7 +18,7 @@ impl LengthFileFinder {
     }
 
     pub fn add(&mut self, lengths: &[u64], scan_directory: &Path) {
-        let entries = WalkDir::new(&scan_directory)
+        let entries = WalkDir::new(scan_directory)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file() && lengths.contains(&e.metadata().unwrap().len()));
@@ -28,9 +28,7 @@ impl LengthFileFinder {
         for entry in entries {
             let length = entry.metadata().unwrap().len();
 
-            if !matches.contains_key(&length) {
-                matches.insert(length, HashSet::new());
-            }
+            matches.entry(length).or_default();
             
             let items = matches.get_mut(&length).unwrap();
             items.insert(entry.into_path());
@@ -48,7 +46,7 @@ impl LengthFileFinder {
         }
     }
 
-    pub fn find_length<'a>(&'a self, length: u64) -> &'a [PathBuf] {
+    pub fn find_length(&self, length: u64) -> &[PathBuf] {
         static EMPTY_RESULT: [PathBuf; 0] = [];
         match self.cache.get(&length) {
             Some(value) => value.as_slice(),

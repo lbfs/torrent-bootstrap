@@ -121,7 +121,7 @@ impl Torrent {
         let lower_bound = (total_size as f64 / torrent.info.piece_length as f64).floor() as u64;
         let pieces_count = (torrent.info.pieces.len() as f64 / 20.0).ceil() as u64;
 
-        if !(lower_bound < pieces_count && pieces_count <= upper_bound) && !(lower_bound == pieces_count && pieces_count == upper_bound) {
+        if !(lower_bound < pieces_count && pieces_count <= upper_bound || lower_bound == pieces_count && pieces_count == upper_bound) {
             // Make sure there is a final hash (even if not complete, within this bound, it should never be equal or lower to the lower bound.)
             // However, if there is an equal divisor, then upper and lower bound should be identical to number of pieces.
             return Err(std::io::Error::new(ErrorKind::InvalidData, "Piece count does not fall with-in the expected piece boundary. This torrent is malformed."))
@@ -137,10 +137,10 @@ impl Torrent {
         let pieces_len = pieces.len();
 
         Ok(Torrent {
-            files: files,
-            pieces: pieces,
+            files,
+            pieces,
             piece_length: pieces_len, // this is wrong..., rename this when we refactor,
-            info_hash: info_hash,
+            info_hash,
             path: path.to_path_buf()
         })
     }
@@ -159,7 +159,7 @@ impl Torrent {
 
     fn format_files(torrent: &IntermediateTorrent, total_length: u64) -> Vec<File> {
         let files = torrent.info.files.clone();
-        let files = match files {
+        match files {
             Some(files) => {
                 files.into_iter().map(|file| {
                     File {
@@ -170,17 +170,14 @@ impl Torrent {
                 .collect()
             },
             None => {
-                let mut files = Vec::new();
-                files.push(File {
-                    path: Torrent::format_content_layout(torrent, None),
-                    length: total_length
-                });
-                files
+                vec![
+                    File {
+                        path: Torrent::format_content_layout(torrent, None),
+                        length: total_length
+                    }
+                ]
             }
-        };
-
-
-        files
+        }
     }
     
     fn get_sha1_hexdigest(bytes: &[u8]) -> String {
@@ -226,10 +223,9 @@ impl Torrent {
                 }
 
                 piece_files.push(PieceFile {
-                    read_start_position: (current_file.length - file_remaining_lengths[file_index])
-                        as u64,
-                    read_length: (file_remaining_lengths[file_index] - current_remaining) as u64,
-                    file_length: current_file.length as u64,
+                    read_start_position: (current_file.length - file_remaining_lengths[file_index]),
+                    read_length: (file_remaining_lengths[file_index] - current_remaining),
+                    file_length: current_file.length,
                     file_path: current_file.path.clone()
                 });
 

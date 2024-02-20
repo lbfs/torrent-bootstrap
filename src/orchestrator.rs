@@ -137,7 +137,7 @@ impl Orchestrator {
             finder.add(&file_lengths, scan_directory.as_path());
         }
 
-        return finder;
+        finder
     }
 
     fn preallocate(path: &Path, length: u64) -> Result<(), std::io::Error> {
@@ -155,9 +155,9 @@ impl Orchestrator {
             // If we fail here, we do have an actual issue and we need to abort since this is not a recoverable
             // situtation, and we have absolutely no idea what directory we're creating.
             let torrent_complete_parent = torrent_complete_path.parent().unwrap();
-            let length = file.length as u64;
+            let length = file.length;
 
-            std::fs::create_dir_all(&torrent_complete_parent)?;
+            std::fs::create_dir_all(torrent_complete_parent)?;
             Orchestrator::preallocate(&torrent_complete_path, length)?;
         }
 
@@ -182,14 +182,14 @@ impl PieceWriter {
         use std::cmp::max;
         let capacity = max(cache_size, 2);
 
-        return PieceWriter {
+        PieceWriter {
             state: Mutex::new(PieceState {
                 fd_cache: LruHashMap::new(capacity),
                 written_pieces: 0,
-                total_piece_count: total_piece_count
+                total_piece_count
             }),
-            export_directory: export_directory
-        };
+            export_directory
+        }
     }
 
     pub fn write(&self, orchestrator_piece: OrchestratorPiece) -> Result<(), std::io::Error> {
@@ -202,43 +202,39 @@ impl PieceWriter {
         .iter()
         .collect();
 
-        match &orchestrator_piece.result {
-            Some(result) => {
-                let mut state = self.state.lock().unwrap();
-                let mut start_position = 0;
+        if let Some(result) = &orchestrator_piece.result {
+            let mut state = self.state.lock().unwrap();
+            let mut start_position = 0;
 
-                for piece_file in &piece.files {
-                    let output_path: PathBuf =
-                        Path::new(&export_directory).join(Path::new(&piece_file.file_path));
+            for piece_file in &piece.files {
+                let output_path: PathBuf =
+                    Path::new(&export_directory).join(Path::new(&piece_file.file_path));
 
-                    // Is this correct?
-                    let handle = match state.fd_cache.get_mut(&output_path) {
-                        Some(handle) => handle,
-                        None => {
-                            let handle = OpenOptions::new().write(true).open(&output_path)?;
-                            state.fd_cache.push(output_path.clone(), handle);
-                            state.fd_cache.get_mut(&output_path).unwrap()
-                        }
-                    };
+                // Is this correct?
+                let handle = match state.fd_cache.get_mut(&output_path) {
+                    Some(handle) => handle,
+                    None => {
+                        let handle = OpenOptions::new().write(true).open(&output_path)?;
+                        state.fd_cache.push(output_path.clone(), handle);
+                        state.fd_cache.get_mut(&output_path).unwrap()
+                    }
+                };
 
-                    handle
-                        .seek(SeekFrom::Start(piece_file.read_start_position))
-                        .expect("Unable to seek into file!");
+                handle
+                    .seek(SeekFrom::Start(piece_file.read_start_position))
+                    .expect("Unable to seek into file!");
 
-                    let end_position = start_position + piece_file.read_length as usize;
+                let end_position = start_position + piece_file.read_length as usize;
 
-                    handle
-                        .write(&result.bytes[start_position..end_position])
-                        .expect("Couldn't write to file!");
+                handle
+                    .write_all(&result.bytes[start_position..end_position])
+                    .expect("Couldn't write to file!");
 
-                    start_position = end_position;
-                }
-
-                state.written_pieces += 1;
-
-                println!("{} of {} total pieces written", state.written_pieces, state.total_piece_count);
+                start_position = end_position;
             }
-            _ => {}
+
+            state.written_pieces += 1;
+            println!("{} of {} total pieces written", state.written_pieces, state.total_piece_count);
         };
 
         Ok(())
@@ -268,8 +264,6 @@ impl SingleFileOrchestrator {
             let writer = writer.clone();
 
             let handle = thread::spawn(move || {
-                let map = map;
-                let finder = finder;
 
                 for (file_length, pieces) in map {
                     SingleFileOrchestrator::process(file_length, pieces, &finder, &writer)?;
@@ -304,7 +298,7 @@ impl SingleFileOrchestrator {
             let mut index = 0;
             while index < pieces_length {
                 let mut piece = pieces.remove(0);
-                let file = piece.piece.files.get(0).unwrap();
+                let file = piece.piece.files.first().unwrap();
 
                 let read_start_position = file.read_start_position as usize;
                 let bytes = SingleFileOrchestrator::read_bytes(path, file.read_length, read_start_position as u64)?;
@@ -313,12 +307,11 @@ impl SingleFileOrchestrator {
 
                 if hasher.result_str() == piece.piece.piece_hash {
                     let bytes = bytes.to_vec();
-                    let mut paths = Vec::new();
-                    paths.push(path.clone());
+                    let paths = vec![path.clone()];
 
                     piece.result = Some(PieceMatchResult {
-                        bytes: bytes,
-                        paths: paths,
+                        bytes,
+                        paths,
                     });
 
                     writer.write(piece)?;
@@ -331,7 +324,7 @@ impl SingleFileOrchestrator {
             }
 
             // If we've processed everything, there is no reason to load more files.
-            if pieces.len() == 0 {
+            if pieces.is_empty() {
                 break;
             }
         }
@@ -356,25 +349,23 @@ impl SingleFileOrchestrator {
             }
         }
 
-        return pieces;
+        pieces
     }
 
     fn make_piece_map(pieces: Vec<OrchestratorPiece>) -> HashMap<u64, Vec<OrchestratorPiece>> {
         let mut single_files: HashMap<u64, Vec<OrchestratorPiece>> = HashMap::new();
 
         for orchestrator_piece in pieces {
-            let file = orchestrator_piece.piece.files.get(0).unwrap();
+            let file = orchestrator_piece.piece.files.first().unwrap();
             let length = file.file_length;
 
-            if !single_files.contains_key(&length) {
-                single_files.insert(length, Vec::new());
-            }
+            single_files.entry(length).or_default();
 
             let items = single_files.get_mut(&length).unwrap();
             items.push(orchestrator_piece);
         }
 
-        return single_files;
+        single_files
     }
 
     fn partition_work_by_thread(
@@ -396,7 +387,7 @@ impl SingleFileOrchestrator {
             map.insert(file_length, pieces);
         }
 
-        return thread_piece_map;
+        thread_piece_map
     }
 
     // TODO: Cleanup duplicate code
@@ -411,7 +402,7 @@ impl SingleFileOrchestrator {
         handle.seek(SeekFrom::Start(read_start_position))?;
         handle.read_exact(&mut read_bytes)?;
 
-        return Ok(read_bytes);
+        Ok(read_bytes)
     }
 }
 
@@ -439,8 +430,6 @@ impl MultiFileOrchestrator {
             let writer = writer.clone();
             
             let handle = thread::spawn(move || {
-                let pieces = pieces;
-
                 for piece in pieces {
                     MultiFileOrchestrator::process(piece, &writer, &finder)?;
                 }
@@ -482,7 +471,7 @@ impl MultiFileOrchestrator {
             }
         }
 
-        return pieces;
+        pieces
     }
 
     fn sort_by_combinations(pieces: &mut [OrchestratorPiece], finder: &LengthFileFinder) {
@@ -511,6 +500,6 @@ impl MultiFileOrchestrator {
             items.push(entry);
         }
 
-        return thread_piece_map;
+        thread_piece_map
     }    
 }

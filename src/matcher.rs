@@ -18,7 +18,7 @@ pub struct PieceMatchResult {
 pub struct MultiFilePieceMatcher;
 impl MultiFilePieceMatcher {
     pub fn count_choices(finder: &LengthFileFinder, piece: &Piece) -> usize {
-        let mut result: usize = if piece.files.len() == 0 { 0 } else { 1 };
+        let mut result: usize = if piece.files.is_empty() { 0 } else { 1 };
 
         for piece_file in &piece.files {
             let files = finder.find_length(piece_file.file_length);
@@ -29,7 +29,7 @@ impl MultiFilePieceMatcher {
             };
         }
 
-        return result;
+        result
     }
 
     pub fn scan(
@@ -39,12 +39,12 @@ impl MultiFilePieceMatcher {
         let mut paths: Vec<&PathBuf> = Vec::new();
         let mut bytes: Vec<u8> = Vec::new();
 
-        if MultiFilePieceMatcher::scan_internal(&mut paths, &mut bytes, finder, &piece)? {
-            let paths: Vec<PathBuf> = paths.into_iter().map(|entry| entry.clone()).collect();
+        if MultiFilePieceMatcher::scan_internal(&mut paths, &mut bytes, finder, piece)? {
+            let paths: Vec<PathBuf> = paths.into_iter().cloned().collect();
 
             return Ok(Some(PieceMatchResult {
-                bytes: bytes,
-                paths: paths,
+                bytes,
+                paths,
             }));
         }
 
@@ -120,6 +120,6 @@ impl MultiFilePieceMatcher {
         handle.seek(SeekFrom::Start(read_start_position))?;
         handle.read_exact(&mut read_bytes)?;
 
-        return Ok(read_bytes);
+        Ok(read_bytes)
     }
 }

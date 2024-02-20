@@ -43,7 +43,7 @@ impl Serialize for BencodeInteger {
     where
         S: serde::Serializer, 
     {
-        serializer.serialize_i64(self.value as i64)
+        serializer.serialize_i64(self.value)
     }
 }
 
@@ -126,7 +126,7 @@ impl Bencode {
             return Err(BencodeError::ValidationException("Unexpected end of file. Continuation token position is not at the end of the bytes array.".to_string()));
         }
 
-        return Ok(token);
+        Ok(token)
     }
 
     fn decode_at_position(bytes: &[u8], start_position: usize) -> Result<BencodeToken, BencodeError> {
@@ -135,10 +135,10 @@ impl Bencode {
         }
     
         match bytes[start_position] {
-            b'0'..=b'9' => Ok(BencodeToken::String(Bencode::decode_string(&bytes, start_position)?)),
-            b'i' => Ok(BencodeToken::Integer(Bencode::decode_integer(&bytes, start_position)?)),
-            b'l' => Ok(BencodeToken::List(Bencode::decode_list(&bytes, start_position)?)),
-            b'd' => Ok(BencodeToken::Dictionary(Bencode::decode_dictionary(&bytes, start_position)?)),
+            b'0'..=b'9' => Ok(BencodeToken::String(Bencode::decode_string(bytes, start_position)?)),
+            b'i' => Ok(BencodeToken::Integer(Bencode::decode_integer(bytes, start_position)?)),
+            b'l' => Ok(BencodeToken::List(Bencode::decode_list(bytes, start_position)?)),
+            b'd' => Ok(BencodeToken::Dictionary(Bencode::decode_dictionary(bytes, start_position)?)),
             _ => { Err(BencodeError::ValidationException("Unexpected character when detecting type to evaluate".to_string())) }
         }
     }
@@ -248,11 +248,11 @@ impl Bencode {
             }
         }
     
-        result = result * result_sign;
+        result *= result_sign;
     
         Ok(BencodeInteger {
             value: result,
-            start_position: start_position,
+            start_position,
             end_position: position,
             continuation_position: position + 1,
         })
@@ -288,7 +288,7 @@ impl Bencode {
     
         Ok(BencodeList {
             value: tokens,
-            start_position: start_position,
+            start_position,
             end_position: position,
             continuation_position: position + 1
         })
@@ -348,7 +348,7 @@ impl Bencode {
     
         Ok(BencodeDictionary {
             value: tokens,
-            start_position: start_position,
+            start_position,
             end_position: position,
             continuation_position: position + 1,
         })
