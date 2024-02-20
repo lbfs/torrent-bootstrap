@@ -307,13 +307,13 @@ impl Bencode {
                     position = token.continuation_position;
                     key_seen = Some(token);
                 },
-                b'0'..=b'9' | b'i' | b'l' | b'd' if key_seen.is_some() && position > start_position => {
+                b'0'..=b'9' | b'i' | b'l' | b'd' if key_seen.is_some() => {
                     let value = Bencode::decode_at_position(bytes, position)?;
                     let key = key_seen.take().unwrap();
                     position = Bencode::get_continuation_position(&value);
                     tokens.push((key, value));
                 }
-                b'e' if position > start_position => {
+                b'e' if position > start_position && key_seen.is_none() => {
                     break;
                 }
                 _ => {
