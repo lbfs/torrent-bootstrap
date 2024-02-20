@@ -123,7 +123,7 @@ impl Bencode {
         let continuation_position = Bencode::get_continuation_position(&token);
         
         if continuation_position != bytes.len() {
-            return Err(BencodeError::MalformedData("Unexpected end of file. Continuation token position is not at the end of the bytes array.".to_string()));
+            return Err(BencodeError::MalformedData("Unexpected end of file. Token continuation position is not at the end of the bytes array.".to_string()));
         }
 
         Ok(token)
