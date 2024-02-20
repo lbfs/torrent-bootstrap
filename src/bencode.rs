@@ -119,7 +119,14 @@ impl Serialize for BencodeToken {
 pub struct Bencode;
 impl Bencode {
     pub fn decode(bytes: &[u8]) -> Result<BencodeToken, BencodeError> {
-        Bencode::decode_at_position(bytes, 0)
+        let token = Bencode::decode_at_position(bytes, 0)?;
+        let continuation_position = Bencode::get_continuation_position(&token);
+        
+        if continuation_position != bytes.len() {
+            return Err(BencodeError::ValidationException("Unexpected end of file. Continuation token position is not at the end of the bytes array.".to_string()));
+        }
+
+        return Ok(token);
     }
 
     fn decode_at_position(bytes: &[u8], start_position: usize) -> Result<BencodeToken, BencodeError> {
