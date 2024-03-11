@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
-    path::PathBuf, collections::HashSet
+    path::PathBuf
 };
 
 use crate::{
@@ -60,31 +60,12 @@ impl MultiFilePieceMatcher {
         let piece_file = piece.files.get(paths.len()).unwrap();
         let entries = finder.find_length(piece_file.file_length);
 
-        // TODO: Accounting. We need to make count_choices return the correct
-        // deduplicated count with the optimization of not hashing entries we've seen.
-        let mut seen: HashSet<String> = HashSet::new();
-        let should_deduplicate = entries.len() > 1;
-
         for entry in entries {
             let read_buffer = MultiFilePieceMatcher::read_bytes(
                 entry,
                 piece_file.read_length,
                 piece_file.read_start_position,
             )?;
-
-            // TODO: Hoist this check somewhere else.
-            // We can filter ahead of time and not have to do this in a loop.
-            if should_deduplicate {
-                let hash = {
-                    let mut hasher = Sha1::new();
-                    hasher.input(&read_buffer);
-                    hasher.result_str()
-                };
-                
-                if !seen.insert(hash) {
-                    continue;
-                }
-            }
 
             let previous_buffer_length = buffer.len();
             buffer.extend(read_buffer);
@@ -93,7 +74,7 @@ impl MultiFilePieceMatcher {
             let valid = if paths.len() == piece.files.len() {
                 let mut hasher = Sha1::new();
                 hasher.input(buffer);
-                hasher.result_str() == piece.piece_hash
+                hasher.result_str() == piece.hash
             } else {
                 MultiFilePieceMatcher::scan_internal(paths, buffer, finder, piece)?
             };
@@ -111,13 +92,13 @@ impl MultiFilePieceMatcher {
 
     fn read_bytes(
         path: &PathBuf,
-        read_length: u64,
-        read_start_position: u64,
+        read_length: usize,
+        read_start_position: usize,
     ) -> Result<Vec<u8>, std::io::Error> {
-        let mut read_bytes = vec![0u8; read_length as usize];
+        let mut read_bytes = vec![0u8; read_length];
         let mut handle = File::open(path)?;
 
-        handle.seek(SeekFrom::Start(read_start_position))?;
+        handle.seek(SeekFrom::Start(read_start_position as u64))?;
         handle.read_exact(&mut read_bytes)?;
 
         Ok(read_bytes)

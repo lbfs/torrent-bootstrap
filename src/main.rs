@@ -11,54 +11,18 @@ mod torrent;
 mod orchestrator;
 mod bencode;
 
-fn load_torrents(torrent_paths: &Vec<PathBuf>) -> Vec<Torrent> {
-    let mut existence: HashSet<String> = HashSet::new();
-    let mut torrents = Vec::new();
-
-    for path in torrent_paths {
-        match Torrent::from(path.as_path()) {
-            Ok(torrent) => {
-                if existence.contains(&torrent.info_hash) {
-                    continue;
-                }
-
-                existence.insert(torrent.info_hash.clone());
-                torrents.push(torrent);
-            }
-            Err(error) => {
-                println!(
-                    "Failed to open torrent file at {} with error {}",
-                    path.to_str().unwrap(),
-                    error.to_string()
-                );
-            }
-        }
-    }
-
-    return torrents;
-}
-
 fn main() {
     let now = Instant::now();
 
     // Scan Torrents
     let mut torrents_paths: Vec<PathBuf> = Vec::new();
-    for e in WalkDir::new("/mnt/stepping/torrent_files").into_iter().filter_map(|e| e.ok()) {
-        if e.metadata().unwrap().is_file() {
-            if e.path().extension().unwrap() == "torrent" {
-                torrents_paths.push(e.path().to_path_buf());
-            }
-        }
-    }
 
     // Load Torrents
-    let torrents = load_torrents(&torrents_paths);
+    let torrents = vec![];
     let torrent_len = torrents.len();
 
     let mut scan_directories: Vec<PathBuf> = Vec::new();
-    scan_directories.push(Path::new(&"/mnt/stepping").to_path_buf());
-
-    let export_directory = Path::new(r#"/mnt/export"#).to_path_buf();
+    let export_directory = Path::new(r#"/mnt/storage/Export"#).to_path_buf();
 
     let options = OrchestratorOptions {
         torrents: torrents,

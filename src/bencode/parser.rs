@@ -1,4 +1,10 @@
-use serde::{ser::{SerializeMap, SerializeSeq}, Serialize};
+use super::error::BencodeErrorKind;
+use super::BencodeToken;
+use super::BencodeDictionary;
+use super::BencodeList;
+use super::BencodeString;
+use super::BencodeError;
+use super::BencodeInteger;
 
 /**
  * Reference: http://bittorrent.org/beps/bep_0003.html
@@ -7,123 +13,14 @@ use serde::{ser::{SerializeMap, SerializeSeq}, Serialize};
  * Lists are encoded as an 'l' followed by their elements (also bencoded) followed by an 'e'. For example l4:spam4:eggse corresponds to ['spam', 'eggs'].
  * Dictionaries are encoded as a 'd' followed by a list of alternating keys and their corresponding values followed by an 'e'. For example, d3:cow3:moo4:spam4:eggse corresponds to {'cow': 'moo', 'spam': 'eggs'} and d4:spaml1:a1:bee corresponds to {'spam': ['a', 'b']}. Keys must be strings and appear in sorted order (sorted as raw strings, not alphanumerics).
 */
-
-#[derive(Debug)]
-pub struct BencodeString {
-    pub value: Vec<u8>,
-    pub start_position: usize,
-    pub end_position: usize,
-    continuation_position: usize
-}
-
-impl Serialize for BencodeString {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer, 
-    {
-        // Ideally we always keep this bytes, but for simplicity let's try to make a UTF-8 string where possible.
-        // Otherwise, it is a massive pain in the ass to move this data around.
-        match String::from_utf8(self.value.clone()) {
-            Ok(output) => serializer.serialize_str(&output),
-            Err(_) => serializer.serialize_bytes(&self.value),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct BencodeInteger {
-    pub value: i64,
-    pub start_position: usize,
-    pub end_position: usize,
-    continuation_position: usize
-}
-
-impl Serialize for BencodeInteger {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer, 
-    {
-        serializer.serialize_i64(self.value)
-    }
-}
-
-#[derive(Debug)]
-pub struct BencodeList {
-    pub value: Vec<BencodeToken>,
-    pub start_position: usize,
-    pub end_position: usize,
-    continuation_position: usize
-}
-
-impl Serialize for BencodeList {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer, 
-    {
-        let mut s = serializer.serialize_seq(Some(self.value.len()))?;
-        for token in &self.value {
-            s.serialize_element(token)?
-        }
-        s.end()
-    }
-}
-
-#[derive(Debug)]
-pub struct BencodeDictionary {
-    pub value: Vec<(BencodeString, BencodeToken)>,
-    pub start_position: usize,
-    pub end_position: usize,
-    continuation_position: usize
-}
-
-impl Serialize for BencodeDictionary {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer, 
-    {
-        let mut s = serializer.serialize_map(Some(self.value.len()))?;
-        for (token_key, token_value) in &self.value {
-            s.serialize_entry(token_key, token_value)?
-        }
-        s.end()
-    }
-}
-
-#[derive(Debug)]
-pub enum BencodeError {
-    MalformedData(String)
-}
-
-#[derive(Debug)]
-pub enum BencodeToken {
-    String(BencodeString),
-    List(BencodeList),
-    Integer(BencodeInteger),
-    Dictionary(BencodeDictionary)
-}
-
-impl Serialize for BencodeToken {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer, 
-    {
-        match self {
-            BencodeToken::String(value) => value.serialize(serializer),
-            BencodeToken::List(value) => value.serialize(serializer),
-            BencodeToken::Integer(value) => value.serialize(serializer),
-            BencodeToken::Dictionary(value) => value.serialize(serializer),
-        }
-    }
-}
-
-pub struct Bencode;
-impl Bencode {
+pub struct Parser;
+impl Parser {
     pub fn decode(bytes: &[u8]) -> Result<BencodeToken, BencodeError> {
-        let token = Bencode::decode_at_position(bytes, 0)?;
-        let continuation_position = Bencode::get_continuation_position(&token);
-        
+        let token = Parser::decode_at_position(bytes, 0)?;
+        let continuation_position = Parser::get_continuation_position(&token);
+
         if continuation_position != bytes.len() {
-            return Err(BencodeError::MalformedData("Unexpected end of file. Token continuation position is not at the end of the bytes array.".to_string()));
+            return Err(BencodeError::new(BencodeErrorKind::MalformedData, "Unexpected end of file. Token continuation position is not at the end of the bytes array.".to_string()));
         }
 
         Ok(token)
@@ -131,15 +28,15 @@ impl Bencode {
 
     fn decode_at_position(bytes: &[u8], start_position: usize) -> Result<BencodeToken, BencodeError> {
         if start_position >= bytes.len() { 
-            return Err(BencodeError::MalformedData("Start position exceeds provided byte string boundaries.".to_string()));
+            return Err(BencodeError::new(BencodeErrorKind::MalformedData, "Start position exceeds provided byte string boundaries.".to_string()));
         }
     
         match bytes[start_position] {
-            b'0'..=b'9' => Ok(BencodeToken::String(Bencode::decode_string(bytes, start_position)?)),
-            b'i' => Ok(BencodeToken::Integer(Bencode::decode_integer(bytes, start_position)?)),
-            b'l' => Ok(BencodeToken::List(Bencode::decode_list(bytes, start_position)?)),
-            b'd' => Ok(BencodeToken::Dictionary(Bencode::decode_dictionary(bytes, start_position)?)),
-            _ => { Err(BencodeError::MalformedData("Unexpected character when detecting type to evaluate".to_string())) }
+            b'0'..=b'9' => Ok(BencodeToken::String(Parser::decode_string(bytes, start_position)?)),
+            b'i' => Ok(BencodeToken::Integer(Parser::decode_integer(bytes, start_position)?)),
+            b'l' => Ok(BencodeToken::List(Parser::decode_list(bytes, start_position)?)),
+            b'd' => Ok(BencodeToken::Dictionary(Parser::decode_dictionary(bytes, start_position)?)),
+            _ => { Err(BencodeError::new(BencodeErrorKind::MalformedData, "Unexpected character when detecting type to evaluate".to_string())) }
         }
     }
 
@@ -160,7 +57,7 @@ impl Bencode {
         
         loop {
             if position >= bytes.len() {
-                return Err(BencodeError::MalformedData(format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
             }
     
             let byte = bytes[position];
@@ -174,15 +71,15 @@ impl Bencode {
                     break;
                 },
                 _ => {
-                    return Err(BencodeError::MalformedData(format!("Unexpected character in bytes at position {}", position)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character in bytes at position {}", position)));
                 }
             }
         }
     
         let end_position = position + evaluated_size - 1;
-    
-        if end_position > bytes.len() { 
-            return Err(BencodeError::MalformedData(format!("Detected end position is larger than available bytes. End Position: {}, Length: {}", end_position, bytes.len())));
+
+        if end_position >= bytes.len() { 
+            return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Detected end position is larger than available bytes. End Position: {}, Length: {}", end_position, bytes.len())));
         }
     
         if end_position < position {         
@@ -205,14 +102,14 @@ impl Bencode {
     fn decode_integer(bytes: &[u8], start_position: usize) -> Result<BencodeInteger, BencodeError> {
         let mut position: usize = start_position;
     
-        let mut result: i64 = 0;
-        let mut result_sign: i64 = 1;
+        let mut result: isize = 0;
+        let mut result_sign: isize = 1;
 
-        let mut first_digit: Option<i64> = None;
+        let mut first_digit: Option<isize> = None;
     
         loop {
             if position >= bytes.len() {
-                return Err(BencodeError::MalformedData(format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
             }
     
             let byte = bytes[position];
@@ -225,15 +122,15 @@ impl Bencode {
                     position += 1;
                 },
                 b'0'..=b'9' if position > start_position => {
-                    let number = (byte - b'0') as i64;
+                    let number = (byte - b'0') as isize;
     
                     if first_digit.is_none() {
                         if result_sign == -1 && number == 0 {
-                            return Err(BencodeError::MalformedData(format!("Integer has illegal negative for number starting with 0 at start position {}.", start_position)));
+                            return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Integer has illegal negative for number starting with 0 at start position {}.", start_position)));
                         }
                         first_digit = Some(number);
                     } else if first_digit.unwrap() == 0 {
-                        return Err(BencodeError::MalformedData(format!("Leading zeros are disallowed unless the number is explicitly 0 at start position {}.", start_position)));
+                        return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Leading zeros are disallowed unless the number is explicitly 0 at start position {}.", start_position)));
                     }
     
                     result = (result * 10) + number;
@@ -243,7 +140,7 @@ impl Bencode {
                     break;
                 },
                 _ => {
-                    return Err(BencodeError::MalformedData(format!("Unexpected character in bytes at position {}", position)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character in bytes at position {}", position)));
                 }
             }
         }
@@ -264,7 +161,7 @@ impl Bencode {
     
         loop {
             if position >= bytes.len() {
-                return Err(BencodeError::MalformedData(format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
             }
     
             let byte = bytes[position];
@@ -273,15 +170,15 @@ impl Bencode {
                     position += 1;
                 }
                 b'0'..=b'9' | b'i' | b'l' | b'd' if position > start_position => {
-                    let token = Bencode::decode_at_position(bytes, position)?;
-                    position = Bencode::get_continuation_position(&token);
+                    let token = Parser::decode_at_position(bytes, position)?;
+                    position = Parser::get_continuation_position(&token);
                     tokens.push(token);
                 }
                 b'e' if position > start_position => {
                     break;
                 }
                 _ => {
-                    return Err(BencodeError::MalformedData(format!("Unexpected character in bytes at position {}", position)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character in bytes at position {}", position)));
                 }
             }
         }
@@ -301,7 +198,7 @@ impl Bencode {
     
         loop {
             if position >= bytes.len() {
-                return Err(BencodeError::MalformedData(format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
             }
     
             let byte = bytes[position];
@@ -310,21 +207,21 @@ impl Bencode {
                     position += 1;
                 }
                 b'0'..=b'9' if key_seen.is_none() && position > start_position => {
-                    let token = Bencode::decode_string(bytes, position)?;
+                    let token = Parser::decode_string(bytes, position)?;
                     position = token.continuation_position;
                     key_seen = Some(token);
                 },
                 b'0'..=b'9' | b'i' | b'l' | b'd' if key_seen.is_some() => {
-                    let value = Bencode::decode_at_position(bytes, position)?;
+                    let value = Parser::decode_at_position(bytes, position)?;
                     let key = key_seen.take().unwrap();
-                    position = Bencode::get_continuation_position(&value);
+                    position = Parser::get_continuation_position(&value);
                     tokens.push((key, value));
                 }
                 b'e' if position > start_position && key_seen.is_none() => {
                     break;
                 }
                 _ => {
-                    return Err(BencodeError::MalformedData(format!("Unexpected character in bytes at position {}", position)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character in bytes at position {}", position)));
                 }
             }
         }
@@ -338,14 +235,14 @@ impl Bencode {
             match pre_key.value.cmp(&post_key.value) {
                 std::cmp::Ordering::Less => (),
                 std::cmp::Ordering::Equal => {
-                    return Err(BencodeError::MalformedData(format!("Duplicate key entries are not allowed for dictionary at dictionary with start_position {}", start_position)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Duplicate key entries are not allowed for dictionary at dictionary with start_position {}", start_position)));
                 },
                 std::cmp::Ordering::Greater => {
-                    return Err(BencodeError::MalformedData(format!("Key entries are not in lexicographical order at dictionary with start_position {}", start_position)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Key entries are not in lexicographical order at dictionary with start_position {}", start_position)));
                 }
             }
         }
-    
+
         Ok(BencodeDictionary {
             value: tokens,
             start_position,
