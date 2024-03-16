@@ -7,7 +7,7 @@ use walkdir::WalkDir;
 
 #[derive(Clone)]
 pub struct LengthFileFinder {
-    pub cache: HashMap<usize, Vec<PathBuf>>,
+    pub cache: HashMap<u64, Vec<PathBuf>>,
 }
 
 impl LengthFileFinder {
@@ -17,16 +17,16 @@ impl LengthFileFinder {
         }
     }
 
-    pub fn add(&mut self, lengths: &[usize], scan_directory: &Path) {
+    pub fn add(&mut self, lengths: &[u64], scan_directory: &Path) {
         let entries = WalkDir::new(scan_directory)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file() && lengths.contains(&(e.metadata().unwrap().len() as usize)));
+            .filter(|e| e.file_type().is_file() && lengths.contains(&(e.metadata().unwrap().len())));
 
         // Create a temporary cache for storing the matches with the matches entries.
-        let mut matches: HashMap<usize, HashSet<PathBuf>> = HashMap::new();
+        let mut matches: HashMap<u64, HashSet<PathBuf>> = HashMap::new();
         for entry in entries {
-            let length = entry.metadata().unwrap().len() as usize;
+            let length = entry.metadata().unwrap().len();
 
             matches.entry(length).or_default();
             
@@ -46,7 +46,7 @@ impl LengthFileFinder {
         }
     }
 
-    pub fn find_length(&self, length: usize) -> &[PathBuf] {
+    pub fn find_length(&self, length: u64) -> &[PathBuf] {
         static EMPTY_RESULT: [PathBuf; 0] = [];
         match self.cache.get(&length) {
             Some(value) => value.as_slice(),

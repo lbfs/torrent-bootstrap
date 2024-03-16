@@ -64,7 +64,7 @@ impl Orchestrator {
     }
 
     fn setup_finder(options: &OrchestratorOptions, torrents: &[Torrent]) -> LengthFileFinder {
-        let mut file_lengths: Vec<usize> = Vec::new();
+        let mut file_lengths: Vec<u64> = Vec::new();
 
         for torrent in torrents {
             let pieces = Pieces::from_torrent(torrent);
@@ -142,7 +142,7 @@ impl SingleFileOrchestrator {
     }
 
     fn process(
-        file_length: usize,
+        file_length: u64,
         mut pieces: Vec<OrchestratorPiece>,
         finder: &LengthFileFinder,
         writer: &PieceWriter
@@ -158,7 +158,7 @@ impl SingleFileOrchestrator {
                 let mut work = pieces.remove(0);
                 let file = work.piece.files.first().unwrap();
 
-                let read_start_position = file.read_start_position as usize;
+                let read_start_position = file.read_start_position;
                 let bytes = SingleFileOrchestrator::read_bytes(path, file.read_length, read_start_position)?;
                 let mut hasher = Sha1::new();
                 hasher.input(&bytes);
@@ -212,8 +212,8 @@ impl SingleFileOrchestrator {
         output
     }
 
-    fn make_piece_map(pieces: Vec<OrchestratorPiece>) -> HashMap<usize, Vec<OrchestratorPiece>> {
-        let mut single_files: HashMap<usize, Vec<OrchestratorPiece>> = HashMap::new();
+    fn make_piece_map(pieces: Vec<OrchestratorPiece>) -> HashMap<u64, Vec<OrchestratorPiece>> {
+        let mut single_files: HashMap<u64, Vec<OrchestratorPiece>> = HashMap::new();
 
         for orchestrator_piece in pieces {
             let file = orchestrator_piece.piece.files.first().unwrap();
@@ -230,9 +230,9 @@ impl SingleFileOrchestrator {
 
     fn partition_work_by_thread(
         thread_count: usize,
-        piece_map: HashMap<usize, Vec<OrchestratorPiece>>,
-    ) -> HashMap<usize, HashMap<usize, Vec<OrchestratorPiece>>> {
-        let mut thread_piece_map: HashMap<usize, HashMap<usize, Vec<OrchestratorPiece>>> =
+        piece_map: HashMap<u64, Vec<OrchestratorPiece>>,
+    ) -> HashMap<usize, HashMap<u64, Vec<OrchestratorPiece>>> {
+        let mut thread_piece_map: HashMap<usize, HashMap<u64, Vec<OrchestratorPiece>>> =
             HashMap::new();
 
         for index in 0..thread_count {
@@ -253,10 +253,10 @@ impl SingleFileOrchestrator {
     // TODO: Cleanup duplicate code
     fn read_bytes(
         path: &PathBuf,
-        read_length: usize,
-        read_start_position: usize,
+        read_length: u64,
+        read_start_position: u64,
     ) -> Result<Vec<u8>, std::io::Error> {
-        let mut read_bytes = vec![0u8; read_length];
+        let mut read_bytes = vec![0u8; read_length as usize];
         let mut handle = File::open(path)?;
 
         handle.seek(SeekFrom::Start(read_start_position as u64))?;

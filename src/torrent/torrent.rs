@@ -8,7 +8,7 @@ pub struct Torrent {
     pub announce: String,
     pub announce_list: Option<Vec<Vec<String>>>,
     pub info: Info,
-    pub creation_date: Option<isize>,
+    pub creation_date: Option<i64>,
     pub comment: Option<String>,
     pub created_by: Option<String>,
     // Not a field in the exported torrent file
@@ -18,18 +18,18 @@ pub struct Torrent {
 
 #[derive(Debug)]
 pub struct File {
-    pub length: usize,
+    pub length: u64,
     pub path: Vec<String>
 }
 
 #[derive(Debug)]
 pub struct Info {
     pub name: String,
-    pub length: Option<usize>,
+    pub length: Option<u64>,
     pub files: Option<Vec<File>>,
-    pub piece_length: usize,
+    pub piece_length: u64,
     pub pieces: Vec<u8>,
-    pub private: Option<isize>
+    pub private: Option<i64>
 }
 
 // Converter
@@ -57,7 +57,13 @@ impl Torrent {
             let info = Torrent::info_dictionary(&info_token)?;
 
             let announce_list = Torrent::announce_list_optional(announce_list_token)?;
-            let creation_date = if let Some(value) = creation_date_token { Some(value.value) } else { None };
+            let creation_date = if let Some(value) = creation_date_token {
+                let creation_date = value.evaluate()
+                    .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("Creation date cannot be parsed.")))?;
+                Some(creation_date) 
+            } else { 
+                None 
+            };
             let comment = Torrent::utf8_string_token_optional(comment_token)?;
             let created_by = Torrent::utf8_string_token_optional(created_by_token)?;
 
@@ -97,8 +103,15 @@ impl Torrent {
         
         // Convert info tokens to usable values
         let name = Torrent::utf8_string_token(name_token)?;
-        let private = if let Some(value) = private_token { Some(value.value) } else { None };
 
+        let private = if let Some(value) = private_token {
+            let private = value.evaluate()
+                .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("Private cannot be parsed.")))?;
+            Some(private) 
+        } else { 
+            None 
+        };
+        
         let mut length = None;
         let mut files = None;
 
@@ -111,11 +124,10 @@ impl Torrent {
         }
 
         if let Some(length_value) = length_token {
-            if length_value.value <= 0 {
-                return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Length must be a non-zero positive number.")));
-            }
+            let value = length_value.evaluate()
+                .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("Length must be a non-zero positive number.")))?;
 
-            length = Some(length_value.value as usize);
+            length = Some(value);
         }
 
         if let Some(files_value) = files_token {
@@ -129,10 +141,8 @@ impl Torrent {
         }
 
         // Validate some shit
-        if piece_length_token.value <= 0 {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Piece length must be a non-zero positive number.")));
-        }
-        let piece_length = piece_length_token.value as usize;
+        let piece_length = piece_length_token.evaluate()
+            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("Piece length must be a non-zero positive number.")))?;
 
         if pieces_token.value.len() == 0 {
             return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Number of pieces must be a non-zero positive number.")));
@@ -225,9 +235,8 @@ impl Torrent {
         let length_token = file_token.find_integer_value("length")
             .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
 
-        if length_token.value <= 0 {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("File entry at position {} is not a non-zero positive number.", length_token.value)));
-        }
+        let value = length_token.evaluate()
+            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
 
         // Get the path for this file
         let path_token = file_token.find_list_value("path")
@@ -244,7 +253,7 @@ impl Torrent {
         }
 
         Ok(File {
-            length: length_token.value as usize,
+            length: value,
             path: result_paths
         })
     }

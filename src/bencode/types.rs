@@ -1,3 +1,6 @@
+
+
+use std::{num::ParseIntError, str::{from_utf8, FromStr}};
 use super::{error::BencodeErrorKind, BencodeError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -5,15 +8,25 @@ pub struct BencodeString {
     pub value: Vec<u8>,
     pub start_position: usize,
     pub end_position: usize,
-    pub(crate) continuation_position: usize
+    pub(super) continuation_position: usize
 }
 
 #[derive(Debug, Clone)]
 pub struct BencodeInteger {
-    pub value: isize,
+    pub(super) value: Vec<u8>,
     pub start_position: usize,
     pub end_position: usize,
-    pub(crate) continuation_position: usize
+    pub(super) continuation_position: usize
+}
+
+impl BencodeInteger {
+    pub fn evaluate<T>(&self) -> Result<T, BencodeError>
+    where T: FromStr<Err = ParseIntError> {
+        from_utf8(&self.value)
+            .expect("Detected non UTF-8 string during string decode. This should never happen.")
+            .parse::<T>()
+            .map_err(|err| BencodeError::new(BencodeErrorKind::MalformedData, err.to_string()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -21,7 +34,7 @@ pub struct BencodeList {
     pub value: Vec<BencodeToken>,
     pub start_position: usize,
     pub end_position: usize,
-    pub(crate) continuation_position: usize
+    pub(super) continuation_position: usize
 }
 
 #[derive(Debug, Clone)]
@@ -29,7 +42,7 @@ pub struct BencodeDictionary {
     pub value: Vec<(BencodeString, BencodeToken)>,
     pub start_position: usize,
     pub end_position: usize,
-    pub(crate) continuation_position: usize
+    pub(super) continuation_position: usize
 }
 
 #[derive(Debug, Clone)]

@@ -4,10 +4,10 @@ use super::Torrent;
 
 #[derive(Debug)]
 pub struct PieceFile {
-    pub read_length: usize,
-    pub read_start_position: usize,
+    pub read_length: u64,
+    pub read_start_position: u64,
     pub file_path: Vec<String>,
-    pub file_length: usize,
+    pub file_length: u64,
 }
 
 #[derive(Debug)]
@@ -15,7 +15,7 @@ pub struct Piece {
     pub position: usize,
     pub files: Vec<PieceFile>,
     pub hash: String,
-    pub length: usize,
+    pub length: u64,
 }
 
 pub struct Pieces;
