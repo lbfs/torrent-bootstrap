@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::Instant
+    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::{Arc}, thread::{self, JoinHandle}, time::Instant
 };
 
 use crypto::{digest::Digest, sha1::Sha1};
@@ -7,7 +7,7 @@ use crypto::{digest::Digest, sha1::Sha1};
 use crate::{
     finder::LengthFileFinder,
     matcher::{MultiFilePieceMatcher, PieceMatchResult},
-    torrent::{Piece, Pieces, Torrent},
+    torrent::{Piece, Pieces, Torrent}, writer::PieceWriter,
 };
 
 pub struct OrchestratorOptions {
@@ -42,6 +42,7 @@ impl Orchestrator {
 
         let writer = Arc::new(
             PieceWriter::new(
+                options.export_directory.clone(),
                 piece_count
             )
         );
@@ -92,83 +93,6 @@ impl Orchestrator {
     }
 }
 
-// Piece Writer
-struct PieceState {
-    written_pieces: usize,
-    total_piece_count: usize
-}
-
-struct PieceWriter {
-    state: Mutex<PieceState>
-}
-
-impl PieceWriter {
-    pub fn new(total_piece_count: usize) -> PieceWriter {
-        PieceWriter {
-            state: Mutex::new(PieceState {
-                written_pieces: 0,
-                total_piece_count
-            })
-        }
-    }
-
-    pub fn write(&self, orchestrator_piece: OrchestratorPiece) -> Result<(), std::io::Error> {
-        let piece = &orchestrator_piece.piece;
-
-        /*
-        let export_directory: PathBuf = [
-            self.export_directory.clone(),
-            Path::new(&orchestrator_piece.torrent_hash).to_path_buf(),
-            Path::new("Data").to_path_buf(),
-        ]
-        .iter()
-        .collect();
-        */
-
-        if let Some(_) = &orchestrator_piece.result {
-            let mut state = self.state.lock().unwrap();
-            let mut start_position = 0;
-
-            for piece_file in &piece.files {
-                
-                /*
-                let output_path: PathBuf =
-                    Path::new(&export_directory).join(Path::new(&piece_file.file_path));
-
-                // Is this correct?
-                let handle = match state.fd_cache.get_mut(&output_path) {
-                    Some(handle) => handle,
-                    None => {
-                        let handle = OpenOptions::new().write(true).open(&output_path)?;
-                        state.fd_cache.push(output_path.clone(), handle);
-                        state.fd_cache.get_mut(&output_path).unwrap()
-                    }
-                };
-
-                handle
-                    .seek(SeekFrom::Start(piece_file.read_start_position))
-                    .expect("Unable to seek into file!");
-
-
-                handle
-                    .write_all(&result.bytes[start_position..end_position])
-                    .expect("Couldn't write to file!");
-                 */
-                let end_position = start_position + piece_file.read_length;
-
-
-                start_position = end_position;
-            }
-
-            state.written_pieces += 1;
-            println!("{} of {} total pieces written - {:.02}%", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64);
-        };
-
-        Ok(())
-    }
-}
-
-// WIP
 struct SingleFileOrchestrator;
 impl SingleFileOrchestrator {
     pub fn start(
@@ -203,7 +127,7 @@ impl SingleFileOrchestrator {
         }
 
         for handle in handles {
-            let _ = handle.join().expect("We have dropped data, aborting!");
+            let _ = handle.join().expect("We have dropped data, aborting!")?;
         }
 
         Ok(())
@@ -217,10 +141,8 @@ impl SingleFileOrchestrator {
     ) -> Result<(), std::io::Error> {
 
         for path in finder.find_length(file_length) {
-            // Get length so we can track where are as we mutate list
             let pieces_length = pieces.len();
 
-            // Now process file for each torrent
             let mut index = 0;
             while index < pieces_length {
                 let mut work = pieces.remove(0);
@@ -244,7 +166,6 @@ impl SingleFileOrchestrator {
                     });
 
                     writer.write(work)?;
-                    // Write file!
                 } else {
                     pieces.push(work);
                 }
@@ -371,7 +292,7 @@ impl MultiFileOrchestrator {
         }
 
         for handle in handles {
-            let _ = handle.join();
+            let _ = handle.join().expect("We have dropped data, aborting!")?;
         }
 
         Ok(())
