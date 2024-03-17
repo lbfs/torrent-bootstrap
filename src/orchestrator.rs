@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::{Arc}, thread::{self, JoinHandle}, time::Instant
+    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::Arc, thread::{self, JoinHandle}, time::Instant
 };
 
 use crypto::{digest::Digest, sha1::Sha1};
