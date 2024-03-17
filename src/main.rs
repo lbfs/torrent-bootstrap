@@ -10,6 +10,7 @@ mod finder;
 mod torrent;
 mod orchestrator;
 mod bencode;
+mod writer;
 
 fn main() {
     let now = Instant::now();
