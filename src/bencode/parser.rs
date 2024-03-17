@@ -134,14 +134,12 @@ impl Parser {
             position += 1;
         }
 
-        let res = BencodeString {
+        Ok(BencodeString {
             start_position,
             end_position: position - 1,
             continuation_position: position,
             value: character_buffer
-        };
-
-        Ok(res)
+        })
     }
 
     fn decode_integer(bytes: &[u8], start_position: usize) -> Result<BencodeInteger, BencodeError> {

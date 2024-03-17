@@ -24,7 +24,7 @@ pub struct OrchestratorOptions {
 pub struct OrchestratorPiece {
     pub piece: Piece,
     pub result: Option<PieceMatchResult>,
-    pub torrent_hash: String,
+    pub torrent_hash: Vec<u8>,
 }
 
 pub struct Orchestrator;
@@ -163,7 +163,10 @@ impl SingleFileOrchestrator {
                 let mut hasher = Sha1::new();
                 hasher.input(&bytes);
 
-                if hasher.result_str() == work.piece.hash {
+                let mut hash = [0u8; 20];
+                hasher.result(&mut hash);
+
+                if work.piece.hash.as_slice().cmp(&hash).is_eq() {
                     let bytes = bytes.to_vec();
                     let paths = vec![path.clone()];
 

@@ -74,7 +74,11 @@ impl MultiFilePieceMatcher {
             let valid = if paths.len() == piece.files.len() {
                 let mut hasher = Sha1::new();
                 hasher.input(buffer);
-                hasher.result_str() == piece.hash
+
+                let mut hash = [0u8; 20];
+                hasher.result(&mut hash);
+
+                piece.hash.as_slice().cmp(&hash).is_eq()
             } else {
                 MultiFilePieceMatcher::scan_internal(paths, buffer, finder, piece)?
             };

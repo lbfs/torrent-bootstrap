@@ -11,6 +11,13 @@ pub struct BencodeString {
     pub(super) continuation_position: usize
 }
 
+impl BencodeString {
+    pub fn as_utf8<'a>(&'a self) -> Result<&'a str, BencodeError> {
+        from_utf8(&self.value)
+            .map_err(|err| BencodeError::new(BencodeErrorKind::MalformedData, err.to_string()))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BencodeInteger {
     pub(super) value: Vec<u8>,

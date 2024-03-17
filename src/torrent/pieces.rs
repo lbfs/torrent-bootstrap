@@ -14,7 +14,7 @@ pub struct PieceFile {
 pub struct Piece {
     pub position: usize,
     pub files: Vec<PieceFile>,
-    pub hash: String,
+    pub hash: Vec<u8>,
     pub length: u64,
 }
 
@@ -24,22 +24,6 @@ impl Pieces {
         Pieces::construct_pieces(torrent)
     }
         
-    fn get_sha1_hexdigest(bytes: &[u8]) -> String {
-        let mut output = String::new();
-        for byte in bytes {
-            write!(&mut output, "{:02x?}", byte).expect("Unable to write");
-        }
-        output
-    }
-
-    fn get_hashes(torrent: &Torrent) -> Vec<String> {
-        torrent.info.pieces
-            .chunks(20)
-            .map(|slice| slice)
-            .map(|slice| Pieces::get_sha1_hexdigest(slice))
-            .collect()
-    }
-
     fn construct_pieces(torrent: &Torrent) -> Vec<Piece> {
         if torrent.info.length.is_some() {
             Pieces::construct_pieces_single_file(torrent)
@@ -52,7 +36,6 @@ impl Pieces {
 
     fn construct_pieces_multiple_file(torrent: &Torrent) -> Vec<Piece> {
         let piece_length = torrent.info.piece_length;
-        let hashes = Pieces::get_hashes(torrent);
 
         let files = torrent.info.files.as_ref().unwrap();
         let file_count = files.len();
@@ -61,8 +44,8 @@ impl Pieces {
             .expect("Files should always have atleast 1 entry")
             .length;
 
-        let mut pieces: Vec<Piece> = Vec::with_capacity(hashes.len());
-        for hash in hashes {
+        let mut pieces: Vec<Piece> = Vec::with_capacity(torrent.info.pieces.len());
+        for hash in &torrent.info.pieces {
             let mut piece_files: Vec<PieceFile> = Vec::new();
             let mut piece_counted_length = 0;
 
@@ -106,7 +89,7 @@ impl Pieces {
             pieces.push(Piece {
                 position: pieces.len(),
                 files: piece_files,
-                hash: hash,
+                hash: hash.clone(),
                 length: length
             });
         }
@@ -115,14 +98,13 @@ impl Pieces {
     }
 
     fn construct_pieces_single_file(torrent: &Torrent) -> Vec<Piece> {
-        let hashes = Pieces::get_hashes(torrent);
-        let mut pieces: Vec<Piece> = Vec::with_capacity(hashes.len());
+        let mut pieces: Vec<Piece> = Vec::with_capacity(torrent.info.pieces.len());
 
         let mut read_start_position = 0;
         let mut file_remaining_length = torrent.info.length.unwrap();
         let piece_length = torrent.info.piece_length;
 
-        for hash in hashes {
+        for hash in &torrent.info.pieces {
             let read_length = if file_remaining_length < piece_length {
                 file_remaining_length
             } else { 
@@ -137,7 +119,7 @@ impl Pieces {
                     file_length: torrent.info.length.unwrap(),
                     file_path: vec![torrent.info.name.clone()]
                 }],
-                hash,
+                hash: hash.clone(),
                 length: read_length
             });
 

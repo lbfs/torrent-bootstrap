@@ -1,6 +1,8 @@
+use std::fmt::Write;
+
 use crypto::{digest::Digest, sha1::Sha1};
 
-use crate::bencode::{BencodeDictionary, BencodeList, BencodeString, BencodeToken, Parser};
+use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeString, BencodeToken, Parser};
 use super::{error::TorrentErrorKind, TorrentError};
 
 #[derive(Debug)]
@@ -13,7 +15,7 @@ pub struct Torrent {
     pub created_by: Option<String>,
     // Not a field in the exported torrent file
     // But needs to be calculated before token disposal since we do not support writing back out... yet?
-    pub info_hash: String
+    pub info_hash: Vec<u8>
 }
 
 #[derive(Debug)]
@@ -28,7 +30,7 @@ pub struct Info {
     pub length: Option<u64>,
     pub files: Option<Vec<File>>,
     pub piece_length: u64,
-    pub pieces: Vec<u8>,
+    pub pieces: Vec<Vec<u8>>,
     pub private: Option<i64>
 }
 
@@ -41,235 +43,204 @@ impl Torrent {
         };
 
         if let BencodeToken::Dictionary(root) = token {
-            let announce_token = root.find_string_value("announce")
-                .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
-
-            let info_token = root.find_dictionary_value("info")
-                .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
-
-            let announce_list_token = root.find_list_value("announce-list").ok();
-            let creation_date_token = root.find_integer_value("creation date").ok();
-            let comment_token = root.find_string_value("comment").ok();
-            let created_by_token = root.find_string_value("created by").ok();
-
-            // Convert torrent tokens to usable values
-            let announce = Torrent::utf8_string_token(&announce_token)?;
-            let info = Torrent::info_dictionary(&info_token)?;
-
-            let announce_list = Torrent::announce_list_optional(announce_list_token)?;
-            let creation_date = if let Some(value) = creation_date_token {
-                let creation_date = value.evaluate()
-                    .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("Creation date cannot be parsed.")))?;
-                Some(creation_date) 
-            } else { 
-                None 
-            };
-            let comment = Torrent::utf8_string_token_optional(comment_token)?;
-            let created_by = Torrent::utf8_string_token_optional(created_by_token)?;
-
-            // Get Info Hash
-            let mut hasher = Sha1::new();
-            hasher.input(&bytes[info_token.start_position..=info_token.end_position]);
-            let info_hash = hasher.result_str();
-
-            return Ok(Torrent {
-                announce,
-                announce_list,
-                info,
-                creation_date,
-                comment,
-                created_by,
-                info_hash
-            });
+            return Torrent::evaluate_root(&root, &bytes);
         }
 
-        Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Root token is not a dictionary token.")))
+        Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Unexpected token at root. Expected dictionary token")))
     }
 
-    fn info_dictionary(info: &BencodeDictionary) -> Result<Info, TorrentError> {
-        let name_token = info.find_string_value("name")
-            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
-
-        let length_token = info.find_integer_value("length").ok();
-        let files_token = info.find_list_value("files").ok();
-
-        let piece_length_token = info.find_integer_value("piece length")
-            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
-
-        let pieces_token = info.find_string_value("pieces")
-            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
-
-        let private_token = info.find_integer_value("private").ok();
+    fn evaluate_root(root: &BencodeDictionary, bytes: &[u8]) -> Result<Torrent, TorrentError> {
+        // Required
+        let announce = root.find_string_value("announce")
+            .map_err(|err| Torrent::convert_error(err))?
+            .as_utf8()
+            .map_err(|err| Torrent::convert_error(err))?
+            .to_string();
         
-        // Convert info tokens to usable values
-        let name = Torrent::utf8_string_token(name_token)?;
+        let info = root.find_dictionary_value("info")
+            .map_err(|err| Torrent::convert_error(err))?;
 
-        let private = if let Some(value) = private_token {
-            let private = value.evaluate()
-                .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("Private cannot be parsed.")))?;
-            Some(private) 
-        } else { 
-            None 
-        };
+        // Get Info Hash
+        let mut hasher = Sha1::new();
+        let mut info_hash = vec![0u8; 20];
+
+        hasher.input(&bytes[info.start_position..=info.end_position]);
+        hasher.result(&mut info_hash);
+
+        // Evaluate Info
+        let info = Torrent::evaluate_info(info)?;
+
+        // Optional
+        let announce_list = if let Ok(value) = root.find_list_value("announce-list") {
+            Some(Torrent::evaluate_announce(value)?)
+        } else { None };
+
+        let creation_date = if let Ok(value) = root.find_integer_value("creation date") {
+            Some(value.evaluate().map_err(|err| Torrent::convert_error(err))?)
+        } else { None };
+
+        let comment = if let Ok(value) = root.find_string_value("comment") {
+            Some(value.as_utf8().map_err(|err| Torrent::convert_error(err))?.to_string())
+        } else { None };
+
+        let created_by = if let Ok(value) = root.find_string_value("created by") {
+            Some(value.as_utf8().map_err(|err| Torrent::convert_error(err))?.to_string())
+        } else { None };
+
+        Ok(Torrent {
+            announce,
+            announce_list,
+            info,
+            creation_date,
+            comment,
+            created_by,
+            info_hash
+        })        
+    }
+
+    fn evaluate_info(info: &BencodeDictionary) -> Result<Info, TorrentError> {
+        let name = info.find_string_value("name")
+            .map_err(|err| Torrent::convert_error(err))?
+            .as_utf8()
+            .map_err(|err| Torrent::convert_error(err))?
+            .to_string();
+
+        let pieces = info.find_string_value("pieces")
+            .map_err(|err| Torrent::convert_error(err))?
+            .value
+            .chunks(20)
+            .map(|slice| slice.to_vec())
+            .collect();
+
+        let piece_length = info.find_integer_value("piece length")
+            .map_err(|err| Torrent::convert_error(err))?
+            .evaluate()
+            .map_err(|err| Torrent::convert_error(err))?;
+
+        // One or the other is required, but not both or neither.
+        let length = info.find_integer_value("length");
+        let files = info.find_list_value("files");
         
-        let mut length = None;
-        let mut files = None;
-
-        if length_token.is_some() && files_token.is_some() {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Info dictionary contains properties of a single-file and multiple-file torrent. It can only be one.")))
+        if length.is_ok() && files.is_ok() {
+            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Info contains length and file properties. Only one must be present.")));
         }
 
-        if length_token.is_none() && files_token.is_none() {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Info dictionary does not contain properties of a single-file or multiple-file torrent.")));
+        if length.is_err() && files.is_err() {
+            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Info does not contain length or file properties. One must be present.")));
         }
 
-        if let Some(length_value) = length_token {
-            let value = length_value.evaluate()
-                .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("Length must be a non-zero positive number.")))?;
+        let length = if let Ok(length) = length {
+            Some(length.evaluate().map_err(|err| Torrent::convert_error(err))?)
+        } else { None };
 
-            length = Some(value);
-        }
+        let files = if let Ok(files) = files {
+            Some(Torrent::evaluate_files(files)?)
+        } else { None };
 
-        if let Some(files_value) = files_token {
-            let result = Torrent::file_list(files_value)?;
-
-            if result.len() == 0 {
-                return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Files must contain at-least one file.")));
-            }
-
-            files = Some(result);
-        }
-
-        // Validate some shit
-        let piece_length = piece_length_token.evaluate()
-            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("Piece length must be a non-zero positive number.")))?;
-
-        if pieces_token.value.len() == 0 {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Number of pieces must be a non-zero positive number.")));
-        }
-        let pieces = pieces_token.value.clone(); // TODO: Remove this clone
-
-        let total_size = match &files {
-            Some(multiple) => {
-                multiple.iter()
-                    .map(|file| file.length as usize)
-                    .sum()
-            },
-            None => {
-                length.unwrap() as usize
-            }
-        };
-
-        let upper_bound = (total_size as f64 / piece_length as f64).ceil() as usize;
-        let lower_bound = (total_size as f64 / piece_length as f64).floor() as usize;
-        let pieces_count = (pieces.len() as f64 / 20.0).ceil() as usize;
-
-        if !(lower_bound < pieces_count && pieces_count <= upper_bound || lower_bound == pieces_count && pieces_count == upper_bound) {
-            // Make sure there is a final hash (even if not complete, within this bound, it should never be equal or lower to the lower bound.)
-            // However, if there is an equal divisor, then upper and lower bound should be identical to number of pieces.
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Piece count does not fall with-in the expected piece boundary.")));
-        }
+        // Optional
+        let private = if let Ok(value) = info.find_integer_value("private") {
+            Some(value.evaluate().map_err(|err| Torrent::convert_error(err))?)
+        } else { None };
 
         Ok(Info {
             name,
-            length,
             files,
+            length,
             piece_length,
             pieces,
-            private,
+            private
         })
     }
 
-    fn announce_list_optional(token: Option<&BencodeList>) -> Result<Option<Vec<Vec<String>>>, TorrentError> {
-        if let Some(token) = token {
-            return Ok(Some(Torrent::announce_list(token)?));
-        }
+    fn evaluate_announce(announce: &BencodeList) -> Result<Vec<Vec<String>>, TorrentError> {
+        let mut announce_result: Vec<Vec<String>> = Vec::new();
 
-        Ok(None)
-    }
+        for entry in &announce.value {
+            match entry {
+                BencodeToken::List(tier) => {
+                    let mut tier_result: Vec<String> = Vec::new();
 
-    fn announce_list(announce_list_token: &BencodeList) -> Result<Vec<Vec<String>>, TorrentError> {
-        let mut results: Vec<Vec<String>> = Vec::new();
+                    for tracker_entry in &tier.value {
+                        match tracker_entry {
+                            BencodeToken::String(tracker) => {
+                                let result = tracker.as_utf8()
+                                    .map_err(|err| Torrent::convert_error(err))?
+                                    .to_string();
 
-        for list_entry_token in &announce_list_token.value {
-            match list_entry_token {
-                BencodeToken::List(list_token) => {
-                    let mut sublist_result: Vec<String> = Vec::new();
-
-                    for sublist_entry_token in &list_token.value {
-                        match sublist_entry_token {
-                            BencodeToken::String(string_value) => {
-                                sublist_result.push(Torrent::utf8_string_token(string_value)?);
+                                tier_result.push(result);
                             },
-                            _ => return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Announce list sub-list token is not a string token.")))
+                            _ => {
+                                return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in tracker tier list. Expected a string token.".to_string()));
+                            }
                         }
                     }
-        
-                    results.push(sublist_result);
-                }
-                _ => return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Announce list token is not a list token.")))
-            }
-        }
 
-        Ok(results)
-    }
-
-    fn file_list(files_token: &BencodeList) -> Result<Vec<File>, TorrentError> {
-        let mut results: Vec<File> = Vec::new();
-
-        for file_token in &files_token.value {
-            match file_token {
-                BencodeToken::Dictionary(files) => {
-                    let file_result = Torrent::file_dictionary(files)?;
-                    results.push(file_result);
+                    announce_result.push(tier_result);
                 },
-                _ => return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("File token is not a dictionary token.")))
+                _ => {
+                    return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in tracker announce list. Expected a list token.".to_string()));
+                }
             }
         }
 
-        Ok(results)
+        Ok(announce_result)
     }
 
-    fn file_dictionary(file_token: &BencodeDictionary) -> Result<File, TorrentError> {
-        // Validate Length
-        let length_token = file_token.find_integer_value("length")
-            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
+    fn evaluate_files(files: &BencodeList) -> Result<Vec<File>, TorrentError> {
+        let mut files_result: Vec<File> = Vec::new(); 
 
-        let value = length_token.evaluate()
-            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
+        for file_entry in &files.value {
+            match file_entry {
+                BencodeToken::Dictionary(file) => {
+                    let result = Torrent::evaluate_file(file)?;
+                    files_result.push(result);
+                },
+                _ => {
+                    return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in files list. Expected a dictionary token.".to_string()));
+                }
+            }
+        }
 
-        // Get the path for this file
-        let path_token = file_token.find_list_value("path")
-            .map_err(|err| TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message)))?;
+        Ok(files_result)
+    }
+
+    fn evaluate_file(file: &BencodeDictionary) -> Result<File, TorrentError> {
+        let length = file.find_integer_value("length")
+            .map_err(|err| Torrent::convert_error(err))?
+            .evaluate::<u64>()
+            .map_err(|err| Torrent::convert_error(err))?;
+    
+        let paths = file.find_list_value("path")
+            .map_err(|err| Torrent::convert_error(err))?;
 
         let mut result_paths: Vec<String> = Vec::new();
-        for path_entry_token in &path_token.value {
-            match path_entry_token {
-                BencodeToken::String(value) => {
-                    result_paths.push(Torrent::utf8_string_token(value)?)
+
+        for path_entry in &paths.value {
+            match path_entry {
+                BencodeToken::String(path) => {
+                    let result = path.as_utf8()
+                        .map_err(|err| Torrent::convert_error(err))?
+                        .to_string();
+
+                    result_paths.push(result);
+                },
+                _ => {
+                    return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in path list. Expected a string token.".to_string()));
                 }
-                _ => return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Path token is not a string token.")))
             }
         }
 
         Ok(File {
-            length: value,
+            length,
             path: result_paths
         })
     }
 
-    fn utf8_string_token_optional(token: Option<&BencodeString>) -> Result<Option<String>, TorrentError> {
-        if let Some(token) = token {
-            return Ok(Some(Torrent::utf8_string_token(token)?));
-        }
+    fn convert_error(err: BencodeError) -> TorrentError {
+        let kind = match err.kind {
+            BencodeErrorKind::MalformedData => TorrentErrorKind::MalformedData
+        };
 
-        Ok(None)
+        TorrentError::new(kind, err.message)
     }
-
-    fn utf8_string_token(token: &BencodeString) -> Result<String, TorrentError> {
-        String::from_utf8(token.value.clone())
-            .map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, format!("String token at position {} is not valid UTF-8", token.start_position)))
-    }
-
-
 }
