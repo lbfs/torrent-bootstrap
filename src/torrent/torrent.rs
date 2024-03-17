@@ -1,8 +1,6 @@
-use std::fmt::Write;
-
 use crypto::{digest::Digest, sha1::Sha1};
 
-use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeString, BencodeToken, Parser};
+use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeToken, Parser};
 use super::{error::TorrentErrorKind, TorrentError};
 
 #[derive(Debug)]
@@ -142,6 +140,15 @@ impl Torrent {
             Some(value.evaluate().map_err(|err| Torrent::convert_error(err))?)
         } else { None };
 
+        // Validate Piece Details
+        let total_length = if files.is_some() {
+            files.as_ref().unwrap().iter().map(|file| file.length).sum()
+        } else { length.unwrap() };
+
+        if !Torrent::validate_piece_length(total_length, piece_length, &pieces) {
+            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Piece count does not fall with-in the expected piece boundary.")));
+        }
+
         Ok(Info {
             name,
             files,
@@ -242,5 +249,19 @@ impl Torrent {
         };
 
         TorrentError::new(kind, err.message)
+    }
+
+    fn validate_piece_length(total_length: u64, piece_length: u64, pieces: &Vec<Vec<u8>>) -> bool {
+        use std::cmp::min;
+
+        let mut remainder = total_length;
+        let mut count = 0;
+
+        while remainder > 0 {
+            count += 1;
+            remainder -= min(remainder, piece_length);
+        }
+
+        pieces.len() == count
     }
 }
