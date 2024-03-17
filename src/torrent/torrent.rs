@@ -1,4 +1,4 @@
-use crypto::{digest::Digest, sha1::Sha1};
+use sha1::{Digest, Sha1};
 
 use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeToken, Parser};
 use super::{error::TorrentErrorKind, TorrentError};
@@ -59,11 +59,7 @@ impl Torrent {
             .map_err(|err| Torrent::convert_error(err))?;
 
         // Get Info Hash
-        let mut hasher = Sha1::new();
-        let mut info_hash = vec![0u8; 20];
-
-        hasher.input(&bytes[info.start_position..=info.end_position]);
-        hasher.result(&mut info_hash);
+        let info_hash = Sha1::digest(&bytes[info.start_position..=info.end_position]).to_vec();
 
         // Evaluate Info
         let info = Torrent::evaluate_info(info)?;

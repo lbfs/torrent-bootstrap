@@ -2,7 +2,7 @@ use std::{
     collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::Arc, thread::{self, JoinHandle}, time::Instant
 };
 
-use crypto::{digest::Digest, sha1::Sha1};
+use sha1::{Digest, Sha1};
 
 use crate::{
     finder::LengthFileFinder,
@@ -150,11 +150,7 @@ impl SingleFileOrchestrator {
 
                 let read_start_position = file.read_start_position;
                 let bytes = SingleFileOrchestrator::read_bytes(path, file.read_length, read_start_position)?;
-                let mut hasher = Sha1::new();
-                hasher.input(&bytes);
-
-                let mut hash = [0u8; 20];
-                hasher.result(&mut hash);
+                let hash = Sha1::digest(&bytes);
 
                 if work.piece.hash.as_slice().cmp(&hash).is_eq() {
                     let bytes = bytes.to_vec();

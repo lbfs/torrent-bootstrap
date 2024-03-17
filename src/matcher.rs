@@ -8,7 +8,8 @@ use crate::{
     finder::LengthFileFinder,
     torrent::Piece,
 };
-use crypto::{digest::Digest, sha1::Sha1};
+use sha1::{Digest, Sha1};
+
 
 pub struct PieceMatchResult {
     pub bytes: Vec<u8>,
@@ -72,12 +73,7 @@ impl MultiFilePieceMatcher {
             paths.push(entry);
 
             let valid = if paths.len() == piece.files.len() {
-                let mut hasher = Sha1::new();
-                hasher.input(buffer);
-
-                let mut hash = [0u8; 20];
-                hasher.result(&mut hash);
-
+                let hash = Sha1::digest(&buffer);
                 piece.hash.as_slice().cmp(&hash).is_eq()
             } else {
                 MultiFilePieceMatcher::scan_internal(paths, buffer, finder, piece)?

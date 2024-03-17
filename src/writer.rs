@@ -41,7 +41,7 @@ impl PieceWriter {
                 // Build File Path
                 let mut complete_path: Vec<PathBuf> = Vec::new();
                 complete_path.push(base_path.clone());
-                for path in &piece_file.file_path {
+                for path in piece_file.file_path.iter() {
                     complete_path.push(PathBuf::from(path));
                 }
                 let complete_path: PathBuf = complete_path.into_iter().collect();
