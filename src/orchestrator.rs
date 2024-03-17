@@ -1,9 +1,5 @@
 use std::{
-    collections::HashMap,
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    path::PathBuf,
-    time::Instant, thread::{self, JoinHandle}, sync::Arc,
+    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::Instant
 };
 
 use crypto::{digest::Digest, sha1::Sha1};
@@ -39,7 +35,16 @@ impl Orchestrator {
             now.elapsed().as_secs()
         );
 
-        let writer = Arc::new(PieceWriter::new());
+        let piece_count = options.torrents
+            .iter()
+            .map(|torrent| torrent.info.pieces.len())
+            .sum();
+
+        let writer = Arc::new(
+            PieceWriter::new(
+                piece_count
+            )
+        );
 
         // Start!
         SingleFileOrchestrator::start(options, &options.torrents, &finder, &writer)?;
@@ -87,14 +92,78 @@ impl Orchestrator {
     }
 }
 
-struct PieceWriter {}
+// Piece Writer
+struct PieceState {
+    written_pieces: usize,
+    total_piece_count: usize
+}
+
+struct PieceWriter {
+    state: Mutex<PieceState>
+}
 
 impl PieceWriter {
-    pub fn new() -> PieceWriter {
-        PieceWriter {}
+    pub fn new(total_piece_count: usize) -> PieceWriter {
+        PieceWriter {
+            state: Mutex::new(PieceState {
+                written_pieces: 0,
+                total_piece_count
+            })
+        }
     }
 
     pub fn write(&self, orchestrator_piece: OrchestratorPiece) -> Result<(), std::io::Error> {
+        let piece = &orchestrator_piece.piece;
+
+        /*
+        let export_directory: PathBuf = [
+            self.export_directory.clone(),
+            Path::new(&orchestrator_piece.torrent_hash).to_path_buf(),
+            Path::new("Data").to_path_buf(),
+        ]
+        .iter()
+        .collect();
+        */
+
+        if let Some(_) = &orchestrator_piece.result {
+            let mut state = self.state.lock().unwrap();
+            let mut start_position = 0;
+
+            for piece_file in &piece.files {
+                
+                /*
+                let output_path: PathBuf =
+                    Path::new(&export_directory).join(Path::new(&piece_file.file_path));
+
+                // Is this correct?
+                let handle = match state.fd_cache.get_mut(&output_path) {
+                    Some(handle) => handle,
+                    None => {
+                        let handle = OpenOptions::new().write(true).open(&output_path)?;
+                        state.fd_cache.push(output_path.clone(), handle);
+                        state.fd_cache.get_mut(&output_path).unwrap()
+                    }
+                };
+
+                handle
+                    .seek(SeekFrom::Start(piece_file.read_start_position))
+                    .expect("Unable to seek into file!");
+
+
+                handle
+                    .write_all(&result.bytes[start_position..end_position])
+                    .expect("Couldn't write to file!");
+                 */
+                let end_position = start_position + piece_file.read_length;
+
+
+                start_position = end_position;
+            }
+
+            state.written_pieces += 1;
+            println!("{} of {} total pieces written - {:.02}%", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64);
+        };
+
         Ok(())
     }
 }
@@ -134,8 +203,7 @@ impl SingleFileOrchestrator {
         }
 
         for handle in handles {
-            // TODO: Something with errors
-            let _ = handle.join();
+            let _ = handle.join().expect("We have dropped data, aborting!");
         }
 
         Ok(())
@@ -184,7 +252,6 @@ impl SingleFileOrchestrator {
                 index += 1;
             }
 
-            // If we've processed everything, there is no reason to load more files.
             if pieces.is_empty() {
                 break;
             }
@@ -311,9 +378,7 @@ impl MultiFileOrchestrator {
     }
 
     fn process(mut piece: OrchestratorPiece, writer: &Arc<PieceWriter>, finder: &LengthFileFinder) -> Result<(), std::io::Error> {
-        println!("Multipiece matcher count {}", MultiFilePieceMatcher::count_choices(finder, &piece.piece));
         piece.result = MultiFilePieceMatcher::scan(finder, &piece.piece)?;
-
         writer.write(piece)
     }
 
