@@ -4,6 +4,7 @@ use crate::orchestrator::OrchestratorPiece;
 
 pub(crate) struct PieceState {
     written_pieces: usize,
+    failed_pieces: usize,
     total_piece_count: usize
 }
 
@@ -17,6 +18,7 @@ impl PieceWriter {
         PieceWriter {
             state: Mutex::new(PieceState {
                 written_pieces: 0,
+                failed_pieces: 0,
                 total_piece_count
             }),
             export_directory: export_directory
@@ -25,9 +27,10 @@ impl PieceWriter {
 
     pub fn write(&self, orchestrator_piece: OrchestratorPiece) -> Result<(), std::io::Error> {
         let piece = &orchestrator_piece.piece;
+        let mut state = self.state.lock().unwrap();
+
 
         if let Some(result) = &orchestrator_piece.result {
-            let mut state = self.state.lock().unwrap();
             let mut start_position = 0;
 
             // Build Folder Path
@@ -50,15 +53,20 @@ impl PieceWriter {
                 let mut handle = OpenOptions::new().write(true).create(true).open(&complete_path)?;
                 handle.set_len(piece_file.file_length)?;
                 handle.seek(SeekFrom::Start(piece_file.read_start_position))?;
-
+                
                 let end_position = start_position + piece_file.read_length;
 
                 handle.write_all(&result.bytes[(start_position as usize)..(end_position as usize)])?;
+
                 start_position = end_position;
             }
 
             state.written_pieces += 1;
-            println!("{} of {} total pieces written - {:.02}%", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64);
+            println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);
+        } else {
+            state.failed_pieces += 1;
+            println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);
+
         };
 
         Ok(())

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::Arc, thread::{self, JoinHandle}, time::Instant
+    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::Instant
 };
 
 use sha1::{Digest, Sha1};
@@ -101,11 +101,12 @@ impl SingleFileOrchestrator {
         finder: &LengthFileFinder,
         writer: &Arc<PieceWriter>
     ) -> Result<(), std::io::Error> {
-        use std::cmp::min;
+        use std::cmp::{min, max};
 
         let pieces = SingleFileOrchestrator::make_piece_list(torrents);
         let piece_map = SingleFileOrchestrator::make_piece_map(pieces);
-        let thread_count = min(piece_map.len(), options.threads);
+
+        let thread_count = max(min(piece_map.len(), options.threads), 1); 
 
         let work = SingleFileOrchestrator::partition_work_by_thread(thread_count, piece_map);
         let mut handles: Vec<JoinHandle<Result<(), std::io::Error>>> = Vec::new();
@@ -172,6 +173,11 @@ impl SingleFileOrchestrator {
             if pieces.is_empty() {
                 break;
             }
+        }
+
+        // Emit the failed blocks for accounting purposes
+        for work in pieces {
+            writer.write(work)?;
         }
 
         Ok(())
@@ -246,14 +252,13 @@ impl SingleFileOrchestrator {
         let mut read_bytes = vec![0u8; read_length as usize];
         let mut handle = File::open(path)?;
 
-        handle.seek(SeekFrom::Start(read_start_position as u64))?;
+        handle.seek(SeekFrom::Start(read_start_position))?;
         handle.read_exact(&mut read_bytes)?;
 
         Ok(read_bytes)
     }
 }
 
-// MultiPieceMatcher Orchestrator
 struct MultiFileOrchestrator;
 impl MultiFileOrchestrator {
     pub fn start(
@@ -262,23 +267,91 @@ impl MultiFileOrchestrator {
         finder: &LengthFileFinder,
         writer: &Arc<PieceWriter>,
     ) -> Result<(), std::io::Error> {
-        use std::cmp::min;
+        use std::cmp::{min, max};
 
         let mut pieces = MultiFileOrchestrator::make_piece_list(torrents);
-        let thread_count = min(pieces.len(), options.threads); 
+        let thread_count = max(min(pieces.len(), options.threads), 1); 
 
-        MultiFileOrchestrator::sort_by_combinations(&mut pieces, finder);
+        MultiFileOrchestrator::sort_by_file_count(&mut pieces);
 
-        let work = MultiFileOrchestrator::partition_work_by_thread(thread_count, pieces);
+        let mut work: HashMap<usize, Arc<Mutex<Vec<OrchestratorPiece>>>> = HashMap::new();
+        work.insert(0, Arc::new(Mutex::new(pieces)));
+
+        for index in 1..thread_count {
+            work.insert(index, Arc::new(Mutex::new(Vec::new())));
+        }
+
+        let work_queues = Arc::new(work);
+
+        // Start up the threads
         let mut handles: Vec<JoinHandle<Result<(), std::io::Error>>> = Vec::new();
 
-        for (_, pieces) in work {
+        for thread_id in 0..thread_count {
             let finder = finder.clone();
             let writer = writer.clone();
-            
+            let work_queues = work_queues.clone();
+
             let handle = thread::spawn(move || {
-                for piece in pieces {
-                    MultiFileOrchestrator::process(piece, &writer, &finder)?;
+                let local_thread_id = thread_id;
+
+                loop {
+                    let mut pieces = work_queues.get(&local_thread_id)
+                        .unwrap()
+                        .lock()
+                        .unwrap();
+
+                    if pieces.len() == 0 {
+                        // Lock all the other threads for balancing
+                        let mut mutex_guards = Vec::new();
+                        mutex_guards.push(pieces);
+
+                        for other_thread_id in 0..thread_count {
+                            if other_thread_id == local_thread_id {
+                                continue;
+                            }
+
+                            let other_pieces = work_queues.get(&other_thread_id)
+                                .unwrap()
+                                .lock()
+                                .unwrap();
+
+                            mutex_guards.push(other_pieces);
+                        }
+
+
+                        // Store the results in an intermediary location
+                        let mut work_to_balance = Vec::new();
+                        for work_queue in mutex_guards.iter_mut() {
+                            let length = work_queue.len();
+                            for _ in 0..length {
+                                work_to_balance.push(work_queue.pop().unwrap());
+                            }
+                        }
+
+                        MultiFileOrchestrator::sort_by_file_count(&mut work_to_balance);
+
+                        // Send the work back out
+                        'outer: loop {
+                            for target in mutex_guards.iter_mut() {
+                                if work_to_balance.len() == 0 {
+                                    break 'outer;
+                                }
+
+                                target.push(work_to_balance.pop().unwrap());
+                            }
+                        }
+
+                        // If we are still 0, exit the thread, there is no more work to take.
+                        if mutex_guards.first().unwrap().len() == 0 {
+                            break;
+                        }
+                    } else if pieces.len() > 0 {
+                        // Items are stored in reverse order on the work queue, first is the most complex.
+                        let piece = pieces.pop().unwrap(); 
+                        drop(pieces);
+                        MultiFileOrchestrator::process(piece, &writer, &finder)?;
+                    } 
+
                 }
 
                 Ok(())
@@ -321,32 +394,12 @@ impl MultiFileOrchestrator {
         output
     }
 
-    fn sort_by_combinations(pieces: &mut [OrchestratorPiece], finder: &LengthFileFinder) {
+    fn sort_by_file_count(pieces: &mut [OrchestratorPiece]) {
         pieces.sort_by(|left, right| {
-            let left_count = MultiFilePieceMatcher::count_choices(finder, &left.piece);
-            let right_count = MultiFilePieceMatcher::count_choices(finder, &right.piece);
+            let left_count = left.piece.files.len();
+            let right_count = right.piece.files.len();
 
             left_count.partial_cmp(&right_count).unwrap()
         });
-    }
-
-    fn partition_work_by_thread(
-        thread_count: usize,
-        pieces: Vec<OrchestratorPiece>,
-    ) -> HashMap<usize, Vec<OrchestratorPiece>> {
-        let mut thread_piece_map: HashMap<usize, Vec<OrchestratorPiece>> = HashMap::new();
-
-        for index in 0..thread_count {
-            thread_piece_map.insert(index, Vec::new());
-        }
-
-        for (index, entry) in pieces.into_iter().enumerate() {
-            let thread_position = index % thread_count;
-
-            let items = thread_piece_map.get_mut(&thread_position).unwrap();
-            items.push(entry);
-        }
-
-        thread_piece_map
-    }    
+    } 
 }

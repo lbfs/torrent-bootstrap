@@ -18,21 +18,6 @@ pub struct PieceMatchResult {
 
 pub struct MultiFilePieceMatcher;
 impl MultiFilePieceMatcher {
-    pub fn count_choices(finder: &LengthFileFinder, piece: &Piece) -> usize {
-        let mut result: usize = if piece.files.is_empty() { 0 } else { 1 };
-
-        for piece_file in &piece.files {
-            let files = finder.find_length(piece_file.file_length);
-
-            result = match result.checked_mul(files.len()) {
-                Some(new_result) => new_result,
-                None => return usize::MAX,
-            };
-        }
-
-        result
-    }
-
     pub fn scan(
         finder: &LengthFileFinder,
         piece: &Piece,
