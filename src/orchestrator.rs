@@ -331,6 +331,8 @@ impl MultiFileOrchestrator {
                         MultiFileOrchestrator::sort_by_file_count(&mut work_to_balance);
 
                         // Send the work back out
+                        let work_to_balance_len = work_to_balance.len();
+
                         'outer: loop {
                             for target in mutex_guards.iter_mut() {
                                 if work_to_balance.len() == 0 {
@@ -341,6 +343,7 @@ impl MultiFileOrchestrator {
                             }
                         }
 
+                        println!("Rebalanced {} items across {} workers with at-minimum {} per worker.", work_to_balance_len, thread_count, work_to_balance_len / thread_count);
                         // If we are still 0, exit the thread, there is no more work to take.
                         if mutex_guards.first().unwrap().len() == 0 {
                             break;
