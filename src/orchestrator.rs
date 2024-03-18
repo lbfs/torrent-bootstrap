@@ -1,11 +1,11 @@
 use std::{
-    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::PathBuf, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::Instant
+    collections::HashMap, path::PathBuf, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::Instant
 };
 
 use sha1::{Digest, Sha1};
 
 use crate::{
-    finder::LengthFileFinder,
+    finder::{read_bytes, LengthFileFinder},
     matcher::{MultiFilePieceMatcher, PieceMatchResult},
     torrent::{Piece, Pieces, Torrent}, writer::PieceWriter,
 };
@@ -20,7 +20,8 @@ pub struct OrchestratorOptions {
 pub struct OrchestratorPiece {
     pub piece: Piece,
     pub result: Option<PieceMatchResult>,
-    pub torrent_hash: Vec<u8>,
+    pub torrent_hash: Arc<Vec<u8>>,
+    pub torrent_name: Arc<String>,
 }
 
 pub struct Orchestrator;
@@ -28,13 +29,7 @@ impl Orchestrator {
     pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
         let now = Instant::now();
 
-        // Setup the finders
-        let finder = Orchestrator::setup_finder(options, &options.torrents);
-        println!(
-            "File finder finished caching and finished at {} seconds.",
-            now.elapsed().as_secs()
-        );
-
+        // Setup Writer
         let piece_count = options.torrents
             .iter()
             .map(|torrent| torrent.info.pieces.len())
@@ -47,19 +42,29 @@ impl Orchestrator {
             )
         );
 
+        // Partition Pieces
+        let (singles, multiple) = Orchestrator::make_piece_list(&options.torrents);
+
+        // Setup the finder
+        let finder = Arc::new(Orchestrator::setup_finder(&options.torrents, &options));
+
+        println!(
+            "File finder finished caching and finished at {} seconds.",
+            now.elapsed().as_secs()
+        );
+
         // Start!
-        SingleFileOrchestrator::start(options, &options.torrents, &finder, &writer)?;
+        SingleFileOrchestrator::start(options, singles, finder.clone(), writer.clone())?;
         println!(
             "Single File Orchestrator finished at {} seconds.",
             now.elapsed().as_secs()
         );
 
-        MultiFileOrchestrator::start(options, &options.torrents, &finder, &writer)?;
+        MultiFileOrchestrator::start(options, multiple, finder, writer.clone())?;
         println!(
             "Multi File Orchestrator finished at {} seconds.",
             now.elapsed().as_secs()
         );
-
 
         println!(
             "Total time elapsed finished at {} seconds.",
@@ -69,18 +74,22 @@ impl Orchestrator {
         Ok(())
     }
 
-    fn setup_finder(options: &OrchestratorOptions, torrents: &[Torrent]) -> LengthFileFinder {
+    fn setup_finder(torrents: &[Torrent], options: &OrchestratorOptions) -> LengthFileFinder {
         let mut file_lengths: Vec<u64> = Vec::new();
 
         for torrent in torrents {
-            let pieces = Pieces::from_torrent(torrent);
-
-            for piece in &pieces {
-                for file in &piece.files {
-                    if !file_lengths.contains(&file.file_length) {
-                        file_lengths.push(file.file_length);
+            if torrent.info.length.is_some() {
+                if !file_lengths.contains(&torrent.info.length.unwrap()) {
+                    file_lengths.push(torrent.info.length.unwrap());
+                }
+            } else if torrent.info.files.is_some() {
+                for file in torrent.info.files.as_ref().unwrap() {
+                    if !file_lengths.contains(&file.length) {
+                        file_lengths.push(file.length);
                     }
                 }
+            } else {
+                panic!("Neither single-file or multiple-files option is available, unable to count file lengths.");
             }
         }
 
@@ -91,23 +100,50 @@ impl Orchestrator {
 
         finder
     }
+
+    fn make_piece_list(torrents: &[Torrent]) -> (Vec<OrchestratorPiece>, Vec<OrchestratorPiece>) {
+        let mut singles = Vec::new();
+        let mut multiple = Vec::new();
+
+        for torrent in torrents {
+            let pieces = Pieces::from_torrent(torrent);
+
+            let torrent_hash = Arc::new(torrent.info_hash.clone());
+            let torrent_name =  Arc::new(torrent.info.name.clone());
+
+            for piece in pieces {
+                let matchable = OrchestratorPiece {
+                    piece: piece,
+                    result: None,
+                    torrent_hash: torrent_hash.clone(),
+                    torrent_name: torrent_name.clone()
+                };
+
+                if matchable.piece.files.len() == 1 {
+                    singles.push(matchable);
+                } else {
+                    multiple.push(matchable);
+                }
+            }
+        }
+
+        (singles, multiple)
+    }
 }
 
 struct SingleFileOrchestrator;
 impl SingleFileOrchestrator {
     pub fn start(
         options: &OrchestratorOptions,
-        torrents: &[Torrent],
-        finder: &LengthFileFinder,
-        writer: &Arc<PieceWriter>
+        pieces: Vec<OrchestratorPiece>,
+        finder: Arc<LengthFileFinder>,
+        writer: Arc<PieceWriter>
     ) -> Result<(), std::io::Error> {
         use std::cmp::{min, max};
 
-        let pieces = SingleFileOrchestrator::make_piece_list(torrents);
         let piece_map = SingleFileOrchestrator::make_piece_map(pieces);
 
         let thread_count = max(min(piece_map.len(), options.threads), 1); 
-
         let work = SingleFileOrchestrator::partition_work_by_thread(thread_count, piece_map);
         let mut handles: Vec<JoinHandle<Result<(), std::io::Error>>> = Vec::new();
 
@@ -150,7 +186,7 @@ impl SingleFileOrchestrator {
                 let file = work.piece.files.first().unwrap();
 
                 let read_start_position = file.read_start_position;
-                let bytes = SingleFileOrchestrator::read_bytes(path, file.read_length, read_start_position)?;
+                let bytes = read_bytes(path, file.read_length, read_start_position)?;
                 let hash = Sha1::digest(&bytes);
 
                 if work.piece.hash.as_slice().cmp(&hash).is_eq() {
@@ -181,28 +217,6 @@ impl SingleFileOrchestrator {
         }
 
         Ok(())
-    }
-
-    fn make_piece_list(torrents: &[Torrent]) -> Vec<OrchestratorPiece> {
-        let mut output: Vec<OrchestratorPiece> = Vec::new();
-
-        for torrent in torrents {
-            let pieces = Pieces::from_torrent(torrent);
-
-            for piece in pieces {
-                if piece.files.len() == 1 {
-                    let matchable = OrchestratorPiece {
-                        piece: piece,
-                        result: None,
-                        torrent_hash: torrent.info_hash.clone(),
-                    };
-
-                    output.push(matchable);
-                }
-            }
-        }
-
-        output
     }
 
     fn make_piece_map(pieces: Vec<OrchestratorPiece>) -> HashMap<u64, Vec<OrchestratorPiece>> {
@@ -242,45 +256,28 @@ impl SingleFileOrchestrator {
 
         thread_piece_map
     }
-
-    // TODO: Cleanup duplicate code
-    fn read_bytes(
-        path: &PathBuf,
-        read_length: u64,
-        read_start_position: u64,
-    ) -> Result<Vec<u8>, std::io::Error> {
-        let mut read_bytes = vec![0u8; read_length as usize];
-        let mut handle = File::open(path)?;
-
-        handle.seek(SeekFrom::Start(read_start_position))?;
-        handle.read_exact(&mut read_bytes)?;
-
-        Ok(read_bytes)
-    }
 }
 
 struct MultiFileOrchestrator;
 impl MultiFileOrchestrator {
     pub fn start(
         options: &OrchestratorOptions,
-        torrents: &[Torrent],
-        finder: &LengthFileFinder,
-        writer: &Arc<PieceWriter>,
+        mut pieces: Vec<OrchestratorPiece>,
+        finder: Arc<LengthFileFinder>,
+        writer: Arc<PieceWriter>,
     ) -> Result<(), std::io::Error> {
         use std::cmp::{min, max};
 
-        let mut pieces = MultiFileOrchestrator::make_piece_list(torrents);
+        MultiFileOrchestrator::sort_by_file_count(&mut pieces);
         let thread_count = max(min(pieces.len(), options.threads), 1); 
 
-        MultiFileOrchestrator::sort_by_file_count(&mut pieces);
-
+        // Create worker threads
         let mut work: HashMap<usize, Arc<Mutex<Vec<OrchestratorPiece>>>> = HashMap::new();
-        work.insert(0, Arc::new(Mutex::new(pieces)));
-
         for index in 1..thread_count {
-            work.insert(index, Arc::new(Mutex::new(Vec::new())));
+            let queue = Vec::with_capacity((pieces.len() / thread_count) + 1);
+            work.insert(index, Arc::new(Mutex::new(queue)));
         }
-
+        work.insert(0, Arc::new(Mutex::new(pieces)));
         let work_queues = Arc::new(work);
 
         // Start up the threads
@@ -302,7 +299,7 @@ impl MultiFileOrchestrator {
 
                     if pieces.len() == 0 {
                         // Lock all the other threads for balancing
-                        let mut mutex_guards = Vec::new();
+                        let mut mutex_guards = Vec::with_capacity(thread_count);
                         mutex_guards.push(pieces);
 
                         for other_thread_id in 0..thread_count {
@@ -317,7 +314,6 @@ impl MultiFileOrchestrator {
 
                             mutex_guards.push(other_pieces);
                         }
-
 
                         // Store the results in an intermediary location
                         let mut work_to_balance = Vec::new();
@@ -373,28 +369,6 @@ impl MultiFileOrchestrator {
     fn process(mut piece: OrchestratorPiece, writer: &Arc<PieceWriter>, finder: &LengthFileFinder) -> Result<(), std::io::Error> {
         piece.result = MultiFilePieceMatcher::scan(finder, &piece.piece)?;
         writer.write(piece)
-    }
-
-    fn make_piece_list(torrents: &[Torrent]) -> Vec<OrchestratorPiece> {
-        let mut output: Vec<OrchestratorPiece> = Vec::new();
-
-        for torrent in torrents {
-            let pieces = Pieces::from_torrent(torrent);
-
-            for piece in pieces {
-                if piece.files.len() > 1 {
-                    let matchable = OrchestratorPiece {
-                        piece: piece,
-                        result: None,
-                        torrent_hash: torrent.info_hash.clone(),
-                    };
-
-                    output.push(matchable);
-                }
-            }
-        }
-
-        output
     }
 
     fn sort_by_file_count(pieces: &mut [OrchestratorPiece]) {

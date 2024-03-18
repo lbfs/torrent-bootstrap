@@ -1,11 +1,7 @@
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    path::PathBuf
-};
+use std::path::PathBuf;
 
 use crate::{
-    finder::LengthFileFinder,
+    finder::{read_bytes, LengthFileFinder},
     torrent::Piece,
 };
 use sha1::{Digest, Sha1};
@@ -47,7 +43,7 @@ impl MultiFilePieceMatcher {
         let entries = finder.find_length(piece_file.file_length);
 
         for entry in entries {
-            let read_buffer = MultiFilePieceMatcher::read_bytes(
+            let read_buffer = read_bytes(
                 entry,
                 piece_file.read_length,
                 piece_file.read_start_position,
@@ -73,19 +69,5 @@ impl MultiFilePieceMatcher {
         }
 
         Ok(false)
-    }
-
-    fn read_bytes(
-        path: &PathBuf,
-        read_length: u64,
-        read_start_position: u64,
-    ) -> Result<Vec<u8>, std::io::Error> {
-        let mut read_bytes = vec![0u8; read_length as usize];
-        let mut handle = File::open(path)?;
-
-        handle.seek(SeekFrom::Start(read_start_position))?;
-        handle.read_exact(&mut read_bytes)?;
-
-        Ok(read_bytes)
     }
 }

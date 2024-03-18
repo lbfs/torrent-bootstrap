@@ -1,4 +1,4 @@
-use std::{fmt::Write, fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, path::PathBuf, sync::Mutex};
+use std::{fmt::Write, fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, path::{Path, PathBuf}, sync::Mutex};
 
 use crate::orchestrator::OrchestratorPiece;
 
@@ -29,7 +29,6 @@ impl PieceWriter {
         let piece = &orchestrator_piece.piece;
         let mut state = self.state.lock().unwrap();
 
-
         if let Some(result) = &orchestrator_piece.result {
             let mut start_position = 0;
 
@@ -37,10 +36,11 @@ impl PieceWriter {
             let mut base_path: Vec<PathBuf> = Vec::new();
             base_path.push(self.export_directory.clone());
             base_path.push(PathBuf::from(PieceWriter::get_sha1_hexdigest(&orchestrator_piece.torrent_hash)));
+            base_path.push(PathBuf::from("Data"));
+            base_path.push(Path::new(orchestrator_piece.torrent_name.as_str()).to_path_buf());
             let base_path: PathBuf = base_path.into_iter().collect();
 
             for piece_file in &piece.files {
-                
                 // Build File Path
                 let mut complete_path: Vec<PathBuf> = Vec::new();
                 complete_path.push(base_path.clone());
