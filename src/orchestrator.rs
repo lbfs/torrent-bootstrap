@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, path::PathBuf, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::Instant
+    collections::HashMap, ops::Deref, path::PathBuf, sync::{Arc, Mutex}, thread::{self, JoinHandle}, time::Instant
 };
 
 use sha1::{Digest, Sha1};
@@ -268,17 +268,34 @@ impl MultiFileOrchestrator {
     ) -> Result<(), std::io::Error> {
         use std::cmp::{min, max};
 
-        MultiFileOrchestrator::sort_by_file_count(&mut pieces);
         let thread_count = max(min(pieces.len(), options.threads), 1); 
 
-        // Create worker threads
-        let mut work: HashMap<usize, Arc<Mutex<Vec<OrchestratorPiece>>>> = HashMap::new();
-        for index in 1..thread_count {
-            let queue = Vec::with_capacity((pieces.len() / thread_count) + 1);
-            work.insert(index, Arc::new(Mutex::new(queue)));
+        // Create Work Queues
+        let mut work_queues: Vec<Vec<OrchestratorPiece>> = Vec::new();
+        for _ in 0..thread_count {
+            work_queues.push(Vec::new());
         }
-        work.insert(0, Arc::new(Mutex::new(pieces)));
-        let work_queues = Arc::new(work);
+
+        MultiFileOrchestrator::sort_by_file_count(&mut pieces);
+
+        // Balance Work
+        'outer: loop  {
+            for work_queue in work_queues.iter_mut() {
+                if pieces.len() == 0 {
+                    break 'outer;
+                }
+
+                work_queue.push(pieces.pop().unwrap());
+            }
+        }
+
+        // Create worker threads
+        let work_queues: Vec<Arc<Mutex<Vec<OrchestratorPiece>>>> = work_queues
+            .into_iter()
+            .map(|queue| Arc::new(Mutex::new(queue)))
+            .collect();
+
+        let work_queues = Arc::new(work_queues);
 
         // Start up the threads
         let mut handles: Vec<JoinHandle<Result<(), std::io::Error>>> = Vec::new();
@@ -292,7 +309,7 @@ impl MultiFileOrchestrator {
                 let local_thread_id = thread_id;
 
                 loop {
-                    let mut pieces = work_queues.get(&local_thread_id)
+                    let mut pieces = work_queues.get(local_thread_id)
                         .unwrap()
                         .lock()
                         .unwrap();
@@ -300,14 +317,19 @@ impl MultiFileOrchestrator {
                     if pieces.len() == 0 {
                         // Lock all the other threads for balancing
                         let mut mutex_guards = Vec::with_capacity(thread_count);
+                        for other_thread_id in 0..local_thread_id {
+                            let other_pieces = work_queues.get(other_thread_id)
+                                .unwrap()
+                                .lock()
+                                .unwrap();
+
+                            mutex_guards.push(other_pieces);
+                        }
+
                         mutex_guards.push(pieces);
 
-                        for other_thread_id in 0..thread_count {
-                            if other_thread_id == local_thread_id {
-                                continue;
-                            }
-
-                            let other_pieces = work_queues.get(&other_thread_id)
+                        for other_thread_id in (local_thread_id + 1)..thread_count {
+                            let other_pieces = work_queues.get(other_thread_id)
                                 .unwrap()
                                 .lock()
                                 .unwrap();
@@ -318,10 +340,7 @@ impl MultiFileOrchestrator {
                         // Store the results in an intermediary location
                         let mut work_to_balance = Vec::new();
                         for work_queue in mutex_guards.iter_mut() {
-                            let length = work_queue.len();
-                            for _ in 0..length {
-                                work_to_balance.push(work_queue.pop().unwrap());
-                            }
+                            work_to_balance.extend(work_queue.drain(..));
                         }
 
                         MultiFileOrchestrator::sort_by_file_count(&mut work_to_balance);
@@ -340,8 +359,10 @@ impl MultiFileOrchestrator {
                         }
 
                         println!("Rebalanced {} items across {} workers with at-minimum {} per worker.", work_to_balance_len, thread_count, work_to_balance_len / thread_count);
+
                         // If we are still 0, exit the thread, there is no more work to take.
-                        if mutex_guards.first().unwrap().len() == 0 {
+                        if mutex_guards.get(local_thread_id).unwrap().len() == 0 {
+                            println!("Exiting thread {}", local_thread_id);
                             break;
                         }
                     } else if pieces.len() > 0 {
