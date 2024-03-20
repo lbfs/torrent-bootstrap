@@ -365,50 +365,52 @@ impl MultiFileOrchestrator {
                                 }
                             }
 
-                            // Sort other threads by those that do not have work first.
-                            // Give them work first, so that they don't waste time doing their own re-balance.
-                            // We know the other threads are most-likely working an item already.
-                            other_guards.sort_by(|a, b| {
-                                a.as_ref().unwrap().len().cmp(&b.as_ref().unwrap().len())
-                            });
+                            if other_guards.len() > 0 {
+                                // Sort other threads by those that do not have work first.
+                                // Give them work first, so that they don't waste time doing their own re-balance.
+                                // We know the other threads are most-likely working an item already.
+                                other_guards.sort_by(|a, b| {
+                                    a.as_ref().unwrap().len().cmp(&b.as_ref().unwrap().len())
+                                });
 
-                            // Take the work from the threads
-                            let work_to_balance = guard.as_mut().unwrap();
-                            for other_guard in other_guards.iter_mut() {
-                                let data = other_guard.as_mut().unwrap();
-                                work_to_balance.extend(data.drain(..));
-                            }
-
-                            // Sort and rebalance
-                            MultiFileOrchestrator::sort_by_file_count( work_to_balance);
-
-                            let total_work = work_to_balance.len();
-                            let active_threads = other_guards.len() + 1;
-
-                            let work_for_other_threads = total_work - ((total_work / active_threads) + ((total_work % active_threads != 0) as usize));
-                            
-                            let min_work_per_worker = work_for_other_threads / other_guards.len();
-                            let mut remainder = work_for_other_threads % other_guards.len();
-
-                            let mut counted_work = 0;
-
-                            for guard in other_guards.iter_mut() {
-                                if work_to_balance.len() == 0 {
-                                    break;
+                                // Take the work from the threads
+                                let work_to_balance = guard.as_mut().unwrap();
+                                for other_guard in other_guards.iter_mut() {
+                                    let data = other_guard.as_mut().unwrap();
+                                    work_to_balance.extend(data.drain(..));
                                 }
 
-                                let has_remaining = (remainder > 0) as usize;
-                                let work_per_worker = min_work_per_worker + has_remaining;
-                                remainder -= has_remaining;
+                                // Sort and rebalance
+                                MultiFileOrchestrator::sort_by_file_count( work_to_balance);
 
-                                let data = guard.as_mut().unwrap();
-                                data.extend(work_to_balance.drain(..work_per_worker));
-                                counted_work += data.len();
+                                let total_work = work_to_balance.len();
+                                let active_threads = other_guards.len() + 1;
+
+                                let work_for_other_threads = total_work - ((total_work / active_threads) + ((total_work % active_threads != 0) as usize));
+                                
+                                let min_work_per_worker = work_for_other_threads / other_guards.len();
+                                let mut remainder = work_for_other_threads % other_guards.len();
+
+                                let mut counted_work = 0;
+
+                                for guard in other_guards.iter_mut() {
+                                    if work_to_balance.len() == 0 {
+                                        break;
+                                    }
+
+                                    let has_remaining = (remainder > 0) as usize;
+                                    let work_per_worker = min_work_per_worker + has_remaining;
+                                    remainder -= has_remaining;
+
+                                    let data = guard.as_mut().unwrap();
+                                    data.extend(work_to_balance.drain(..work_per_worker));
+                                    counted_work += data.len();
+                                }
+
+                                counted_work += work_to_balance.len();
+
+                                println!("Rebalanced {} items across {} workers with at-minimum {} per worker; lost {}", total_work, active_threads, min_work_per_worker, total_work - counted_work);
                             }
-
-                            counted_work += work_to_balance.len();
-
-                            println!("Rebalanced {} items across {} workers with at-minimum {} per worker; lost {}", total_work, active_threads, min_work_per_worker, total_work - counted_work);
 
                             // Mark thread as dead if there is no more work and exit
                             match guard.as_ref() {
