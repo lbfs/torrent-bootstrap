@@ -5,7 +5,7 @@ use std::{
 use sha1::{Digest, Sha1};
 
 use crate::{
-    finder::{read_bytes, LengthFileFinder}, matcher::{MultiFilePieceMatcher, PieceMatchResult}, processor::{Processor, Solver}, torrent::{Piece, Pieces, Torrent}, writer::PieceWriter
+    finder::{read_bytes, LengthFileFinder}, matcher::{MultiFilePieceMatcher, PieceMatchResult}, solver::Solver, torrent::{Piece, Pieces, Torrent}, writer::PieceWriter
 };
 
 pub struct OrchestratorOptions {
@@ -56,7 +56,7 @@ impl Orchestrator {
         let single_piece_map_as_list: Vec<_> = single_piece_map.into_iter().collect();
 
         let single_solver = SinglePieceSolver { writer: writer.clone(), finder: finder.clone() };
-        Processor::start(single_solver, single_piece_map_as_list, options.threads)?;
+        single_solver.start(single_piece_map_as_list, options.threads)?;
 
         println!(
             "Single File Orchestrator finished at {} seconds.",
@@ -64,7 +64,7 @@ impl Orchestrator {
         );
 
         let multiple_solver = MultiplePieceSolver { writer: writer.clone(), finder: finder.clone() };
-        Processor::start(multiple_solver, multiple, options.threads)?;
+        multiple_solver.start(multiple, options.threads)?;
 
         println!(
             "Multi File Orchestrator finished at {} seconds.",

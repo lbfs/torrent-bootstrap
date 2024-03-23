@@ -1,41 +1,10 @@
-use std::{cmp::{max, min}, collections::HashMap, marker::PhantomData, sync::{Arc, Mutex}, thread::{self, JoinHandle}};
+use std::{cmp::{max, min}, collections::HashMap, sync::{Arc, Mutex}, thread::{self, JoinHandle}};
 
-pub trait Solver<T: Sync + Send + 'static, E: Sync + Send + 'static> {
+pub trait Solver<T: Sync + Send + 'static, E: Sync + Send + 'static> 
+    where Self: Send + Sync + Sized + Clone + 'static {
     fn solve(&self, work: T) -> Result<(), E>;
 
-    // Source should be the thread that is performing the rebalance and should have all items from
-    // all threads executing, others will be the other threads that will be given a new set of work items.
-    // Source should always have 1 item or it will shutdown causing workers >= available_work
-    fn balance(source: &mut Vec<T>, others: &mut Vec<&mut Vec<T>>) {
-        let total_work = source.len();
-        let active_threads = others.len() + 1;
-
-        let work_for_other_threads = total_work - ((total_work / active_threads) + ((total_work % active_threads != 0) as usize));
-
-        let min_work_per_worker = work_for_other_threads / others.len();
-        let mut remainder = work_for_other_threads % others.len();
-
-        for target in others.iter_mut() {
-            let has_remaining = (remainder > 0) as usize;
-            let work_for_target = min_work_per_worker + has_remaining;
-            remainder -= has_remaining;
-
-            target.extend(source.drain(..work_for_target));
-        }
-
-        let counted_work = source.len() + others
-            .iter()
-            .map(|target| target.len())
-            .sum::<usize>();
-        
-        println!("Rebalanced {} items across {} workers with at-minimum {} per worker; lost {}", total_work, active_threads, min_work_per_worker, total_work - counted_work);
-    }
-}
-
-pub struct Processor<T, E, S>(PhantomData<T>, PhantomData<E>, PhantomData<S>);
-
-impl<T: Sync + Send + 'static, E: Sync + Send + 'static, S: Solver<T, E> + Clone + Send + Sync + 'static> Processor<T, E, S> {
-    pub fn start(solver: S, items: Vec<T>, thread_count: usize) -> Result<(), E> {
+    fn start(&self, items: Vec<T>, thread_count: usize) -> Result<(), E> {
         // No items means nothing to process; quickly leave.
         if items.len() == 0 {
             return Ok(());
@@ -45,7 +14,7 @@ impl<T: Sync + Send + 'static, E: Sync + Send + 'static, S: Solver<T, E> + Clone
         let thread_count = max(min(items.len(), thread_count), 1);
 
         // Worker function
-        let worker_fn = |thread_id: usize, solver: S, local_queue: Arc<Mutex<Option<Vec<T>>>>, work_queue: Arc<Mutex<HashMap<usize, Arc<Mutex<Option<Vec<T>>>>>>>| -> Result<(), E> {
+        let worker_fn = |solver: Self, thread_id: usize, local_queue: Arc<Mutex<Option<Vec<T>>>>, work_queue: Arc<Mutex<HashMap<usize, Arc<Mutex<Option<Vec<T>>>>>>>| -> Result<(), E> {
             'outer: loop {
                 let found = {
                     let guard = local_queue.try_lock();
@@ -121,7 +90,7 @@ impl<T: Sync + Send + 'static, E: Sync + Send + 'static, S: Solver<T, E> + Clone
                                     .map(|value| value.as_mut().unwrap())
                                     .collect();
 
-                                S::balance(&mut source, &mut others);
+                                Self::balance(&mut source, &mut others);
                             }
                         }
 
@@ -161,10 +130,10 @@ impl<T: Sync + Send + 'static, E: Sync + Send + 'static, S: Solver<T, E> + Clone
 
         for (thread_id, local_queue) in work_queue {
             let shared_work_queue = shared_work_queue.clone();
-            let solver = solver.clone();
+            let solver = (*self).clone();
 
             let handle = thread::spawn(move || {
-                worker_fn(thread_id, solver, local_queue, shared_work_queue)
+                worker_fn(solver, thread_id, local_queue, shared_work_queue)
             });
 
             handles.push(handle);
@@ -184,5 +153,33 @@ impl<T: Sync + Send + 'static, E: Sync + Send + 'static, S: Solver<T, E> + Clone
         }
 
         Ok(())
+    }
+
+    // Source should be the thread that is performing the rebalance and should have all items from
+    // all threads executing, others will be the other threads that will be given a new set of work items.
+    // Source should always have 1 item or it will shutdown causing workers >= available_work
+    fn balance(source: &mut Vec<T>, others: &mut Vec<&mut Vec<T>>) {
+        let total_work = source.len();
+        let active_threads = others.len() + 1;
+
+        let work_for_other_threads = total_work - ((total_work / active_threads) + ((total_work % active_threads != 0) as usize));
+
+        let min_work_per_worker = work_for_other_threads / others.len();
+        let mut remainder = work_for_other_threads % others.len();
+
+        for target in others.iter_mut() {
+            let has_remaining = (remainder > 0) as usize;
+            let work_for_target = min_work_per_worker + has_remaining;
+            remainder -= has_remaining;
+
+            target.extend(source.drain(..work_for_target));
+        }
+
+        let counted_work = source.len() + others
+            .iter()
+            .map(|target| target.len())
+            .sum::<usize>();
+        
+        println!("Rebalanced {} items across {} workers with at-minimum {} per worker; lost {}", total_work, active_threads, min_work_per_worker, total_work - counted_work);
     }
 }
