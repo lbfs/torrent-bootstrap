@@ -1,14 +1,14 @@
 use std::{fmt::Write, fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, path::{Path, PathBuf}, sync::Mutex};
 
-use crate::orchestrator::OrchestratorPiece;
+use super::orchestrator::OrchestratorPiece;
 
-pub(crate) struct PieceState {
+pub(super) struct PieceState {
     written_pieces: usize,
     failed_pieces: usize,
     total_piece_count: usize
 }
 
-pub(crate) struct PieceWriter {
+pub(super) struct PieceWriter {
     state: Mutex<PieceState>,
     export_directory: PathBuf
 }
