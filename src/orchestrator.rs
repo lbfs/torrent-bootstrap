@@ -12,8 +12,7 @@ pub struct OrchestratorOptions {
 pub struct OrchestratorPiece {
     pub piece: Piece,
     pub result: Option<PieceMatchResult>,
-    pub torrent_hash: Arc<Vec<u8>>,
-    pub torrent_name: Arc<String>,
+    pub info_hash: Arc<Vec<u8>>
 }
 
 pub struct Orchestrator;
@@ -35,12 +34,8 @@ impl Orchestrator {
             .map(|torrent| torrent.info.pieces.len())
             .sum();
 
-        let writer = Arc::new(
-            PieceWriter::new(
-                options.export_directory.clone(),
-                piece_count
-            )
-        );
+        let writer = PieceWriter::new(piece_count, &options.export_directory, &options.torrents);
+        let writer = Arc::new(writer);
 
         // Partition Pieces
         let (singles, multiple) = Orchestrator::make_piece_list(&options.torrents);
@@ -64,7 +59,6 @@ impl Orchestrator {
             "Multi File Orchestrator finished at {} seconds.",
             now.elapsed().as_secs()
         );
-
 
         println!(
             "Total time elapsed finished at {} seconds.",
@@ -107,16 +101,13 @@ impl Orchestrator {
 
         for torrent in torrents {
             let pieces = Pieces::from_torrent(torrent);
-
-            let torrent_hash = Arc::new(torrent.info_hash.clone());
-            let torrent_name =  Arc::new(torrent.info.name.clone());
+            let info_hash = Arc::new(torrent.info_hash.clone());
 
             for piece in pieces {
                 let matchable = OrchestratorPiece {
                     piece: piece,
                     result: None,
-                    torrent_hash: torrent_hash.clone(),
-                    torrent_name: torrent_name.clone()
+                    info_hash: info_hash.clone()
                 };
 
                 if matchable.piece.files.len() == 1 {

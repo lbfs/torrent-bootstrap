@@ -76,21 +76,20 @@ pub trait Solver<T: Sync + Send + 'static, E: Sync + Send + 'static>
                                 a.as_ref().unwrap().len().cmp(&b.as_ref().unwrap().len())
                             });
 
-                            // Take the work from the threads
-                            let mut source = guard.as_mut().unwrap();
-                            for other_guard in other_guards.iter_mut() {
-                                let data = other_guard.as_mut().unwrap();
-                                source.extend(data.drain(..));
+                            // Count available work
+                            let mut remaining_work = guard.as_ref().unwrap().len();
+                            for other_guard in other_guards.iter() {
+                                remaining_work += other_guard.as_ref().unwrap().len();
                             }
 
-                            if source.len() > 0 {
+                            if remaining_work > 0 {
                                 // Sort and rebalance
                                 let mut others: Vec<_> = other_guards
                                     .iter_mut()
                                     .map(|value| value.as_mut().unwrap())
                                     .collect();
 
-                                Self::balance(&mut source, &mut others);
+                                Self::balance(guard.as_mut().unwrap(), &mut others);
                             }
                         }
 
@@ -155,31 +154,32 @@ pub trait Solver<T: Sync + Send + 'static, E: Sync + Send + 'static>
         Ok(())
     }
 
-    // Source should be the thread that is performing the rebalance and should have all items from
-    // all threads executing, others will be the other threads that will be given a new set of work items.
-    // Source should always have 1 item or it will shutdown causing workers >= available_work
+    // Source should be the thread that is performing the rebalance, others is all other locked threads.
+    // Source should always have 1 item unless the total work queue is empty, or 
+    // worker will shutdown and a different thread will have more work items on queue then necessary.
     fn balance(source: &mut Vec<T>, others: &mut Vec<&mut Vec<T>>) {
-        let total_work = source.len();
-        let active_threads = others.len() + 1;
+        if others.len() > 0 {
+            let others_len = others.len();
 
-        let work_for_other_threads = total_work - ((total_work / active_threads) + ((total_work % active_threads != 0) as usize));
+            let mut total_work = others.first().unwrap().len();
+            let mut max_worker = 0;
 
-        let min_work_per_worker = work_for_other_threads / others.len();
-        let mut remainder = work_for_other_threads % others.len();
+            for index in 1..others_len {
+                let compare_worker = others.get(index).unwrap();
 
-        for target in others.iter_mut() {
-            let has_remaining = (remainder > 0) as usize;
-            let work_for_target = min_work_per_worker + has_remaining;
-            remainder -= has_remaining;
+                if compare_worker.len() > total_work {
+                    max_worker = index;
+                    total_work = compare_worker.len();
+                }
+            }
 
-            target.extend(source.drain(..work_for_target));
+            let max_worker = others.get_mut(max_worker).unwrap();
+
+            let take = (max_worker.len() / 2) + ((max_worker.len() % 2 != 0) as usize);
+            source.extend(max_worker.drain(..take));
+
+            let counted_work = source.len() + max_worker.len();
+            println!("Rebalanced {} items between 2 workers; lost {}", total_work, total_work - counted_work);
         }
-
-        let counted_work = source.len() + others
-            .iter()
-            .map(|target| target.len())
-            .sum::<usize>();
-        
-        println!("Rebalanced {} items across {} workers with at-minimum {} per worker; lost {}", total_work, active_threads, min_work_per_worker, total_work - counted_work);
     }
 }

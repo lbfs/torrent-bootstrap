@@ -139,6 +139,9 @@ impl Solver<OrchestratorPiece, std::io::Error> for MultiplePieceSolver {
     // losing much data.
     fn balance(source: &mut Vec<OrchestratorPiece>, others: &mut Vec<&mut Vec<OrchestratorPiece>>) {
         let mut collected: Vec<OrchestratorPiece> = source.drain(..).collect();
+        for other in others.iter_mut() {
+            collected.extend(other.drain(..));
+        }
 
         let total_work = collected.len();
         let active_threads = others.len() + 1;
