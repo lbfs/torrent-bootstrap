@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
-use crate::{finder::LengthFileFinder, matcher::PieceMatchResult, solver::{MultiplePieceSolver, SinglePieceSolver, Solver}, torrent::{Piece, Pieces, Torrent}, writer::PieceWriter};
+use crate::{finder::LengthFileFinder, solver::{MultiplePieceSolver, PieceMatchResult, SinglePieceSolver, Solver}, torrent::{Piece, Pieces, Torrent}, writer::PieceWriter};
 
 pub struct OrchestratorOptions {
     pub torrents: Vec<Torrent>,

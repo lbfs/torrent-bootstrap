@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, LengthFileFinder}, matcher::PieceMatchResult, orchestrator::OrchestratorPiece, writer::PieceWriter};
+use crate::{finder::{read_bytes, LengthFileFinder},orchestrator::OrchestratorPiece, writer::PieceWriter};
 
-use super::Solver;
+use super::{PieceMatchResult, Solver};
 
 #[derive(Clone)]
 pub struct SinglePieceSolver {
