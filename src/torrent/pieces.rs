@@ -1,10 +1,12 @@
+use std::path::{Path, PathBuf};
+
 use super::Torrent;
 
 #[derive(Debug)]
 pub struct PieceFile {
     pub read_length: u64,
     pub read_start_position: u64,
-    pub file_path: Vec<String>,
+    pub file_path: PathBuf,
     pub file_length: u64,
 }
 
@@ -115,7 +117,7 @@ impl Pieces {
                     read_start_position: read_start_position,
                     read_length: read_length,
                     file_length: torrent.info.length.unwrap(),
-                    file_path: vec![torrent.info.name.clone()]
+                    file_path: Path::new(&torrent.info.name).to_path_buf()
                 }],
                 hash: hash.clone(),
                 length: read_length

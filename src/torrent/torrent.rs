@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use sha1::{Digest, Sha1};
 
 use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeToken, Parser};
@@ -19,7 +21,7 @@ pub struct Torrent {
 #[derive(Debug)]
 pub struct File {
     pub length: u64,
-    pub path: Vec<String>
+    pub path: PathBuf
 }
 
 #[derive(Debug)]
@@ -235,7 +237,7 @@ impl Torrent {
 
         Ok(File {
             length,
-            path: result_paths
+            path: result_paths.into_iter().collect()
         })
     }
 

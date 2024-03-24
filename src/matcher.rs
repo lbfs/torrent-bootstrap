@@ -80,8 +80,37 @@ impl MultiFilePieceMatcher {
             let mut results: Vec<(&'a PathBuf, Vec<u8>)> = Vec::new();
             let entries = finder.find_length(file.file_length);
 
-            for entry in entries {
+            let mut entries: Vec<&'a PathBuf> = entries.iter().collect();
+
+            // Sort by filename so that we check matching filenames first before checking 
+            // other random files.
+            entries.sort_by(|a, b| {
+                let mut a_1 = a.ends_with(&file.file_path) as usize;
+                let mut b_1 = b.ends_with(&file.file_path) as usize;
+
+                if let Some(source) = file.file_path.file_name() {
+                    if let Some(a_filename) = a.file_name() {
+                        a_1 += source.cmp(a_filename).is_eq() as usize;
+                    }
+    
+                    if let Some(b_filename) = b.file_name() {
+                        b_1 += source.cmp(b_filename).is_eq() as usize;
+                    }
+                }
+
+                a_1.cmp(&b_1).reverse()
+            });
+
+            // De-duplicate identical files if the file has already been seen.
+            'inner: for entry in entries {
                 let value = read_bytes(entry, file.read_length, file.read_start_position)?;
+
+                for (_, result_bytes) in results.iter() {
+                    if result_bytes.cmp(&value).is_eq() {
+                        continue 'inner;
+                    }
+                }
+
                 results.push((entry, value));
             }
 
