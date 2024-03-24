@@ -1,29 +1,23 @@
-use std::{time::Instant, path::{Path, PathBuf}, collections::HashSet};
-
-use torrent::Torrent;
-use walkdir::WalkDir;
+use std::{path::{Path, PathBuf}, time::Instant};
 
 use crate::orchestrator::{OrchestratorOptions, Orchestrator};
 
-mod matcher;
 mod finder;
 mod torrent;
 mod orchestrator;
 mod bencode;
 mod writer;
+mod solver;
 
 fn main() {
     let now = Instant::now();
-
-    // Scan Torrents
-    let mut torrents_paths: Vec<PathBuf> = Vec::new();
 
     // Load Torrents
     let torrents = vec![];
     let torrent_len = torrents.len();
 
-    let mut scan_directories: Vec<PathBuf> = Vec::new();
-    let export_directory = Path::new(r#"/mnt/storage/Export"#).to_path_buf();
+    let scan_directories: Vec<PathBuf> = Vec::new();
+    let export_directory = Path::new(r#""#).to_path_buf();
 
     let options = OrchestratorOptions {
         torrents: torrents,
