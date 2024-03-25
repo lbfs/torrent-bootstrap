@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read, path::{Path, PathBuf}, time::Instant};
+use std::{fs::File, io::Read, path::Path, time::Instant};
 
 use clap::Parser;
 use torrent_bootstrap::{Orchestrator, OrchestratorOptions, Torrent};
@@ -23,10 +23,9 @@ struct Cli {
     threads: usize,
 }
 
-fn main() -> std::io::Result<()> {
-    let now = Instant::now();
-
+fn run() -> std::io::Result<()> {
     let args = Cli::parse();
+    let now = Instant::now();
 
     // Load Torrents
     let mut torrents: Vec<Torrent> = Vec::new();
@@ -48,27 +47,22 @@ fn main() -> std::io::Result<()> {
     }
     let torrent_len = torrents.len();
 
-
-    let mut scan_directories: Vec<PathBuf> = Vec::new();
-    for scan_directory in &args.scan {
-        scan_directories.push(Path::new(scan_directory).to_path_buf());
-    }
-
-    let export_directory = Path::new(&args.export).to_path_buf();
-
+    // Start it up!
     let options = OrchestratorOptions {
         torrents: torrents,
-        scan_directories: scan_directories,
-        export_directory: export_directory,
-        threads: 16
+        scan_directories: args.scan.iter().map(|value| Path::new(value).to_path_buf()).collect(),
+        export_directory: Path::new(&args.export).to_path_buf(),
+        threads: args.threads
     };
 
-    if let Err(err) = Orchestrator::start(&options) {
-        eprintln!("Error: {}", err);
-    }
-
+    let res = Orchestrator::start(&options);
     let elapsed = now.elapsed().as_secs();
     println!("Time elapsed took {} seconds for {} torrents.", elapsed, torrent_len);
+    res
+}
 
-    Ok(())
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("Error: {}", err);
+    }
 }
