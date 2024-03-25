@@ -9,7 +9,7 @@ pub struct OrchestratorOptions {
     pub threads: usize,
 }
 
-pub struct OrchestrationPieceFile {
+pub(crate) struct OrchestrationPieceFile {
     // Filled out when generating pieces
     pub read_length: u64,
     pub read_start_position: u64,
@@ -22,12 +22,9 @@ pub struct OrchestrationPieceFile {
     pub export: PathBuf
 }
 
-pub struct OrchestrationPiece {
+pub(crate) struct OrchestrationPiece {
     pub files: Vec<OrchestrationPieceFile>,
-    pub hash: Vec<u8>,
-    pub position: usize,
-    pub length: u64, 
-    pub info_hash: Vec<u8>
+    pub hash: Vec<u8>
 }
 
 pub struct Orchestrator;
@@ -220,10 +217,7 @@ impl Orchestrator {
   
                 let matchable = OrchestrationPiece {
                     files: orchestration_piece_files,
-                    info_hash: torrent.info_hash.clone(),
-                    hash: piece.hash,
-                    position: piece.position,
-                    length: piece.length
+                    hash: piece.hash
                 };
                 
                 results.push(matchable);
