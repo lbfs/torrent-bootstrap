@@ -1,6 +1,6 @@
 use std::{fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, sync::Mutex};
 
-use super::orchestrator::OrchestratorPiece;
+use crate::orchestrator::OrchestrationPiece;
 
 pub struct PieceState {
     written_pieces: usize,
@@ -23,28 +23,23 @@ impl PieceWriter {
         }
     }
 
-    pub fn write(&self, orchestrator_piece: OrchestratorPiece) -> Result<(), std::io::Error> {
+    pub fn write(&self, entry: Option<OrchestrationPiece>) -> Result<(), std::io::Error> {
         let mut state = self.state.lock().unwrap();
 
-        let piece = &orchestrator_piece.piece;
+        if let Some(entry) = entry {
+            for file in entry.files.iter() {
+                if let Some(source) = &file.source {
+                    if !source.eq(&file.export) {
+                        if let Some(bytes) = &file.bytes {
+                            fs::create_dir_all(file.export.parent().unwrap())?;
 
-        if let Some(result) = &orchestrator_piece.result {
-            let mut start_position = 0;
-
-            for (index, piece_file) in piece.files.iter().enumerate() {
-                let end_position = start_position + piece_file.read_length;
-                let export_path = orchestrator_piece.export_paths.get(index).unwrap();
-
-                if !export_path.eq(result.paths.get(index).unwrap()) {
-                    fs::create_dir_all(export_path.parent().unwrap())?;
-
-                    let mut handle = OpenOptions::new().write(true).create(true).open(&export_path)?;
-                    handle.set_len(piece_file.file_length)?;
-                    handle.seek(SeekFrom::Start(piece_file.read_start_position))?;
-                    handle.write_all(&result.bytes[(start_position as usize)..(end_position as usize)])?;
+                            let mut handle = OpenOptions::new().write(true).create(true).open(&file.export)?;
+                            handle.set_len(file.file_length)?;
+                            handle.seek(SeekFrom::Start(file.read_start_position))?;
+                            handle.write_all(&bytes)?;
+                        }
+                    }
                 }
-
-                start_position = end_position;
             }
 
             state.written_pieces += 1;

@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, sort_by_target_absolute_path, LengthFileFinder},orchestrator::OrchestratorPiece, writer::PieceWriter};
+use crate::{finder::{read_bytes, sort_by_target_absolute_path, LengthFileFinder}, orchestrator::OrchestrationPiece, writer::PieceWriter};
 
-use super::{PieceMatchResult, Solver};
+use super::Solver;
 
 #[derive(Clone)]
 pub struct SinglePieceSolver {
@@ -21,44 +21,36 @@ impl SinglePieceSolver {
     }
 }
 
-impl Solver<Vec<OrchestratorPiece>, std::io::Error> for SinglePieceSolver {
-    // Requires that all files have the same length and same target export path
-    // TODO: Add proper validation checks
-    fn solve(&self, mut work: Vec<OrchestratorPiece>) -> Result<(), std::io::Error> {
+impl Solver<Vec<OrchestrationPiece>, std::io::Error> for SinglePieceSolver {
+    fn solve(&self, mut work: Vec<OrchestrationPiece>) -> Result<(), std::io::Error> {
         if work.len() == 0 {
             return Ok(());
         }
 
-        // Get first entry and use it to determine the current file length
-        let file_length = work.first().unwrap().piece.files.first().unwrap().file_length;
-        let file_path = &work.first().unwrap().piece.files.first().unwrap().file_path;
-        let export_path = work.first().unwrap().export_paths.first().unwrap();
+        let first = work.first().unwrap();
+        let first_file = first.files.first().unwrap();
 
-        let entries = self.finder.find_length(file_length);
-        let entries = sort_by_target_absolute_path(file_path, export_path, entries);
+        let search_paths = self.finder.find_length(first_file.file_length);
+        let search_paths = sort_by_target_absolute_path(&first_file.file_path, &first_file.export, search_paths);
 
         // Evaluate
-        for path in entries {
+        for search_path in search_paths {
             let pieces_length = work.len();
 
             let mut index = 0;
             while index < pieces_length {
                 let mut entry = work.remove(0);
-                let file = entry.piece.files.first().unwrap();
+                let entry_first_file = entry.files.first_mut().unwrap();
 
-                let bytes = read_bytes(path, file.read_length, file.read_start_position)?;
+                let bytes = read_bytes(search_path, entry_first_file.read_length, entry_first_file.read_start_position)?;
                 let hash = Sha1::digest(&bytes);
 
-                if entry.piece.hash.as_slice().cmp(&hash).is_eq() {
-                    let bytes = bytes.to_vec();
-                    let paths = vec![path.clone()];
+                if entry.hash.as_slice().cmp(&hash).is_eq() {
+                    entry_first_file.bytes = Some(bytes.to_vec());
+                    entry_first_file.source = Some(search_path.clone());
 
-                    entry.result = Some(PieceMatchResult {
-                        bytes,
-                        paths,
-                    });
-
-                    self.writer.write(entry)?;
+     
+                    self.writer.write(Some(entry))?;
                 } else {
                     work.push(entry);
                 }
@@ -72,8 +64,8 @@ impl Solver<Vec<OrchestratorPiece>, std::io::Error> for SinglePieceSolver {
         }
 
         // Emit the failed blocks for accounting purposes
-        for work in work {
-            self.writer.write(work)?;
+        for _ in work {
+            self.writer.write(None)?;
         }
 
         Ok(())

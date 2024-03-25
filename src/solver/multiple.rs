@@ -2,9 +2,9 @@ use std::{cmp::min, collections::HashMap, path::PathBuf, sync::Arc};
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, sort_by_target_absolute_path, LengthFileFinder}, orchestrator::OrchestratorPiece, torrent::Piece, writer::PieceWriter};
+use crate::{finder::{read_bytes, sort_by_target_absolute_path, LengthFileFinder}, orchestrator::OrchestrationPiece, writer::PieceWriter};
 
-use super::{PieceMatchResult, Solver};
+use super::Solver;
 
 #[derive(Clone)]
 pub struct MultiplePieceSolver {
@@ -22,76 +22,53 @@ impl MultiplePieceSolver {
 
     fn scan(
         finder: &LengthFileFinder,
-        work: &OrchestratorPiece,
-    ) -> Result<Option<PieceMatchResult>, std::io::Error> {
-        // Check if we have at-minimum 1 match that can be made.
-        for file in work.piece.files.iter() {
-            if finder.find_length(file.file_length).len() == 0 {
-                return Ok(None);
-            }
-        }
-
-        // Start scanning
-        let mut paths: Vec<&PathBuf> = Vec::with_capacity(work.piece.files.len());
-        let mut bytes: Vec<u8> = Vec::with_capacity(work.piece.length as usize);
-        let loaded = MultiplePieceSolver::preload(work, finder)?;
-
-        if MultiplePieceSolver::scan_internal(&mut paths, &mut bytes, &loaded, &work.piece)? {
-            let paths: Vec<PathBuf> = paths.into_iter().cloned().collect();
-
-            return Ok(Some(PieceMatchResult {
-                bytes,
-                paths,
-            }));
-        }
-
-        Ok(None)
+        mut entry: &mut OrchestrationPiece,
+    ) -> Result<bool, std::io::Error> {
+        let loaded = MultiplePieceSolver::preload(entry, finder)?;
+        MultiplePieceSolver::scan_internal(0, Sha1::new(), &loaded, &mut entry)
     }
 
     fn scan_internal<'a>(
-        paths: &mut Vec<&'a PathBuf>,
-        buffer: &mut Vec<u8>,
+        depth: usize,
+        hasher: Sha1,
         finder: &HashMap<usize, Vec<(&'a PathBuf, Vec<u8>)>>,
-        piece: &Piece
+        entry: &mut OrchestrationPiece
     ) -> Result<bool, std::io::Error> {
-        let entries = finder.get(&paths.len()).unwrap();
+        let entries = finder.get(&depth).unwrap();
 
-        for (path, read_buffer) in entries {
-            let previous_buffer_length = buffer.len();
-            buffer.extend(read_buffer);
-            paths.push(*path);
+        for (path, read_buffer) in entries.into_iter() {
+            let mut hasher = hasher.clone();
+            hasher.update(&read_buffer);
 
-            let valid = if paths.len() == piece.files.len() {
-                let hash = Sha1::digest(&buffer);
-                piece.hash.as_slice().cmp(&hash).is_eq()
+            let valid = if depth + 1 == entry.files.len() {
+                let hash = hasher.finalize();
+                entry.hash.as_slice().cmp(&hash).is_eq()
             } else {
-                MultiplePieceSolver::scan_internal(paths, buffer, finder, piece)?
+                MultiplePieceSolver::scan_internal(depth + 1, hasher, finder, entry)?
             };
 
             if valid {
+                let depth_file = entry.files.get_mut(depth).unwrap();
+                depth_file.bytes = Some(read_buffer.clone());
+                depth_file.source = Some(path.to_path_buf());
                 return Ok(valid);
             }
-
-            paths.pop();
-            buffer.truncate(previous_buffer_length);
         }
 
         Ok(false)
     }
 
-    fn preload<'a>(work: &OrchestratorPiece, finder: &'a LengthFileFinder) -> Result<HashMap<usize, Vec<(&'a PathBuf, Vec<u8>)>>, std::io::Error> {
+    fn preload<'a>(entry: &OrchestrationPiece, finder: &'a LengthFileFinder) -> Result<HashMap<usize, Vec<(&'a PathBuf, Vec<u8>)>>, std::io::Error> {
         let mut loaded = HashMap::new();
 
-        for (file_position, file) in work.piece.files.iter().enumerate() {
+        for (file_position, file) in entry.files.iter().enumerate() {
             let mut results: Vec<(&'a PathBuf, Vec<u8>)> = Vec::new();
-            let entries = finder.find_length(file.file_length);
-
-            let export_directory = work.export_paths.get(file_position).unwrap();
-            let entries = sort_by_target_absolute_path(&file.file_path, export_directory, entries);
+            let search_paths = finder.find_length(file.file_length);
+            let search_paths = sort_by_target_absolute_path(&file.file_path, &file.export, search_paths);
 
             // De-duplicate identical files if the file has already been seen.
-            'inner: for entry in entries {
-                let value = read_bytes(entry, file.read_length, file.read_start_position)?;
+            'inner: for search_path in search_paths {
+                let value = read_bytes(search_path, file.read_length, file.read_start_position)?;
 
                 for (_, result_bytes) in results.iter() {
                     if result_bytes.cmp(&value).is_eq() {
@@ -99,7 +76,7 @@ impl MultiplePieceSolver {
                     }
                 }
 
-                results.push((entry, value));
+                results.push((search_path, value));
             }
 
             loaded.insert(file_position, results);
@@ -109,17 +86,22 @@ impl MultiplePieceSolver {
     }
 }
 
-impl Solver<OrchestratorPiece, std::io::Error> for MultiplePieceSolver {
-    fn solve(&self, mut work: OrchestratorPiece) -> Result<(), std::io::Error> {
-        work.result = MultiplePieceSolver::scan(&self.finder, &work)?;
-        self.writer.write(work)
+impl Solver<OrchestrationPiece, std::io::Error> for MultiplePieceSolver {
+    fn solve(&self, mut entry: OrchestrationPiece) -> Result<(), std::io::Error> {
+        let result = MultiplePieceSolver::scan(&self.finder, &mut entry)?;
+
+        if result {
+            self.writer.write(Some(entry))
+        } else {
+            self.writer.write(None)
+        }
     }
 
     // Custom balance method to enforce that cheaper pieces to evaluate are always evaulated first, regardless
     // of the thread, making it easier to terminate the program if it gets stuck on high cardinality pieces without
     // losing much data.
-    fn balance(source: &mut Vec<OrchestratorPiece>, others: &mut Vec<&mut Vec<OrchestratorPiece>>) {
-        let mut collected: Vec<OrchestratorPiece> = source.drain(..).collect();
+    fn balance(source: &mut Vec<OrchestrationPiece>, others: &mut Vec<&mut Vec<OrchestrationPiece>>) {
+        let mut collected: Vec<OrchestrationPiece> = source.drain(..).collect();
         for other in others.iter_mut() {
             collected.extend(other.drain(..));
         }
@@ -129,8 +111,8 @@ impl Solver<OrchestratorPiece, std::io::Error> for MultiplePieceSolver {
 
         // Sort
         collected.sort_by(|left, right| {
-            let left_count = left.piece.files.len();
-            let right_count = right.piece.files.len();
+            let left_count = left.files.len();
+            let right_count = right.files.len();
 
             left_count.cmp(&right_count)
         });

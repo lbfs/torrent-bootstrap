@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Write, fs::File, path::{Path, PathBuf}, sync::Arc, time::Instant};
 
-use crate::{finder::LengthFileFinder, solver::{MultiplePieceSolver, PieceMatchResult, SinglePieceSolver, Solver}, torrent::{Piece, PieceFile, Pieces, Torrent}, writer::PieceWriter};
+use crate::{finder::LengthFileFinder, solver::{MultiplePieceSolver, SinglePieceSolver, Solver}, torrent::{PieceFile, Pieces, Torrent}, writer::PieceWriter};
 
 pub struct OrchestratorOptions {
     pub torrents: Vec<Torrent>,
@@ -9,17 +9,51 @@ pub struct OrchestratorOptions {
     pub threads: usize,
 }
 
-pub struct OrchestratorPiece {
-    pub piece: Piece,
-    pub result: Option<PieceMatchResult>,
-    pub info_hash: Arc<Vec<u8>>,
-    pub export_paths: Vec<PathBuf>
+pub struct OrchestrationPieceFile {
+    // Filled out when generating pieces
+    pub read_length: u64,
+    pub read_start_position: u64,
+    pub file_path: PathBuf,
+    pub file_length: u64,
+
+    // Filled out by orchestration
+    pub bytes: Option<Vec<u8>>,
+    pub source: Option<PathBuf>,
+    pub export: PathBuf
+}
+
+pub struct OrchestrationPiece {
+    pub files: Vec<OrchestrationPieceFile>,
+    pub hash: Vec<u8>,
+    pub position: usize,
+    pub length: u64, 
+    pub info_hash: Vec<u8>
 }
 
 pub struct Orchestrator;
 impl Orchestrator {
     pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
         let now = Instant::now();
+
+        // Make sure paths are allowed
+        for scan_directory in options.scan_directories.iter() {
+            if !(scan_directory.exists() && scan_directory.is_dir()) {
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Scan directory does not exist or is not a directory."))?
+            } 
+
+            if !scan_directory.is_absolute() {
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Scan directory must be an absolute path."))?
+            }
+        }
+
+        // Check export path to make sure it is valid also.
+        if !(options.export_directory.exists() && options.export_directory.is_dir()) {
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Export directory does not exist or is not a directory."))?
+        } 
+
+        if !options.export_directory.is_absolute() {
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Export directory must be an absolute path."))?
+        }
 
         // Make sure we don't have duplicate torrents
         let mut hashes = Vec::new();
@@ -33,19 +67,19 @@ impl Orchestrator {
         drop(hashes);
 
         // Setup work
-        let work = Orchestrator::make_piece_list(&options.torrents, &options.export_directory);
+        let work = Orchestrator::convert_pieces_to_work(&options.torrents, &options.export_directory);
 
         // Validate entries
         // Solvers will weigh the identical paths as higher, and writer will skip any parts that have already been written
         for entry in work.iter() {
-            for (export_path, file_entry) in entry.export_paths.iter().zip(entry.piece.files.iter()) {
-                let expected_file_length = file_entry.file_length;
+            for file in entry.files.iter() {
+                let expected_file_length = file.file_length;
 
-                if !export_path.exists() {
+                if !file.export.exists() {
                     continue;
                 }
 
-                let handle = File::open(export_path)?;
+                let handle = File::open(&file.export)?;
                 if handle.metadata()?.len() != expected_file_length {
                     Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file does not match the file length in the piece. Aborting to prevent accidental data loss."))?
                 }
@@ -69,8 +103,28 @@ impl Orchestrator {
         let writer = PieceWriter::new(piece_count);
         let writer = Arc::new(writer);
 
+        // Immeditately reject any piece without matches
+        let mut accepted = Vec::new();
+
+        for entry in work {
+            let mut is_rejected = false;
+
+            for file in entry.files.iter() {
+                if finder.find_length(file.file_length).len() == 0 {
+                    is_rejected = true;
+                    break;
+                }
+            }
+
+            if is_rejected {
+                writer.write(None)?;
+            } else {
+                accepted.push(entry);
+            }
+        }
+
         // Partition Pieces
-        let (singles, multiple) = Orchestrator::partition_piece_list(work);
+        let (singles, multiple) = Orchestrator::partition_piece_list(accepted);
 
         // Start!
         let single_pieces_partitioned_by_hash = Orchestrator::partition_single_pieces_by_path_and_length(singles);
@@ -125,12 +179,12 @@ impl Orchestrator {
         finder
     }
 
-    fn partition_piece_list(work: Vec<OrchestratorPiece>) -> (Vec<OrchestratorPiece>, Vec<OrchestratorPiece>) {
+    fn partition_piece_list(work: Vec<OrchestrationPiece>) -> (Vec<OrchestrationPiece>, Vec<OrchestrationPiece>) {
         let mut singles = Vec::new();
         let mut multiple = Vec::new();
 
         for entry in work {
-            if entry.piece.files.len() == 1 {
+            if entry.files.len() == 1 {
                 singles.push(entry);
             } else {
                 multiple.push(entry);
@@ -140,24 +194,36 @@ impl Orchestrator {
         (singles, multiple)
     }
 
-    fn make_piece_list(torrents: &[Torrent], export_directory: &Path) -> Vec<OrchestratorPiece> {
+    fn convert_pieces_to_work(torrents: &[Torrent], export_directory: &Path) -> Vec<OrchestrationPiece> {
         let mut results = Vec::new();
 
         for torrent in torrents {
             let pieces = Pieces::from_torrent(torrent);
-            let info_hash = Arc::new(torrent.info_hash.clone());
 
             for piece in pieces {
-                let mut export_paths: Vec<PathBuf> = Vec::new();
-                for file in piece.files.iter() {
-                    export_paths.push(Orchestrator::format_path(file, torrent, export_directory));
+                let mut orchestration_piece_files: Vec<OrchestrationPieceFile> = Vec::new();
+
+                for file in piece.files {
+                    let export = Orchestrator::format_path(&file, torrent, export_directory);
+
+                    orchestration_piece_files.push(OrchestrationPieceFile {
+                        read_length: file.read_length,
+                        read_start_position: file.read_start_position,
+                        file_path: file.file_path,
+                        file_length: file.file_length,
+                        bytes: None,
+                        source: None,
+                        export
+                    });
                 }
 
-                let matchable = OrchestratorPiece {
-                    piece: piece,
-                    result: None,
-                    info_hash: info_hash.clone(),
-                    export_paths
+  
+                let matchable = OrchestrationPiece {
+                    files: orchestration_piece_files,
+                    info_hash: torrent.info_hash.clone(),
+                    hash: piece.hash,
+                    position: piece.position,
+                    length: piece.length
                 };
                 
                 results.push(matchable);
@@ -168,33 +234,33 @@ impl Orchestrator {
     }
 
     // Only use this with single pieces!
-    fn partition_single_pieces_by_length(work: Vec<OrchestratorPiece>) -> HashMap<u64, Vec<OrchestratorPiece>> {
-        let mut single_files: HashMap<u64, Vec<OrchestratorPiece>> = HashMap::new();
+    fn partition_single_pieces_by_length(work: Vec<OrchestrationPiece>) -> HashMap<u64, Vec<OrchestrationPiece>> {
+        let mut single_files: HashMap<u64, Vec<OrchestrationPiece>> = HashMap::new();
 
-        for orchestrator_piece in work {
-            let file = orchestrator_piece.piece.files.first().unwrap();
+        for entry in work {
+            let file = entry.files.first().unwrap();
             let length = file.file_length;
 
             single_files.entry(length).or_default();
 
             let items = single_files.get_mut(&length).unwrap();
-            items.push(orchestrator_piece);
+            items.push(entry);
         }
 
         single_files
     }
 
-    fn partition_single_pieces_by_path_and_length(work: Vec<OrchestratorPiece>) -> Vec<Vec<OrchestratorPiece>> {
+    fn partition_single_pieces_by_path_and_length(work: Vec<OrchestrationPiece>) -> Vec<Vec<OrchestrationPiece>> {
         let mut total = Vec::new();
 
         for (_, value) in Orchestrator::partition_single_pieces_by_length(work) {
-            let mut partitioned: HashMap<PathBuf, Vec<OrchestratorPiece>> = HashMap::new();
+            let mut partitioned: HashMap<PathBuf, Vec<OrchestrationPiece>> = HashMap::new();
 
-            for orchestrator_piece in value {
-                partitioned.entry(orchestrator_piece.export_paths.first().unwrap().clone()).or_default();
+            for entry in value {
+                partitioned.entry(entry.files.first().unwrap().export.clone()).or_default();
     
-                let items = partitioned.get_mut(orchestrator_piece.export_paths.first().unwrap()).unwrap();
-                items.push(orchestrator_piece);
+                let items = partitioned.get_mut(&entry.files.first().unwrap().export).unwrap();
+                items.push(entry);
             }
     
             total.extend(partitioned.into_iter().map(|(_, v)| v))
