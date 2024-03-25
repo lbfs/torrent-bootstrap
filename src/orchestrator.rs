@@ -1,6 +1,6 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
+use std::{collections::HashMap, fmt::Write, fs::File, path::{Path, PathBuf}, sync::Arc, time::Instant};
 
-use crate::{finder::LengthFileFinder, solver::{MultiplePieceSolver, PieceMatchResult, SinglePieceSolver, Solver}, torrent::{Piece, Pieces, Torrent}, writer::PieceWriter};
+use crate::{finder::LengthFileFinder, solver::{MultiplePieceSolver, PieceMatchResult, SinglePieceSolver, Solver}, torrent::{Piece, PieceFile, Pieces, Torrent}, writer::PieceWriter};
 
 pub struct OrchestratorOptions {
     pub torrents: Vec<Torrent>,
@@ -12,13 +12,45 @@ pub struct OrchestratorOptions {
 pub struct OrchestratorPiece {
     pub piece: Piece,
     pub result: Option<PieceMatchResult>,
-    pub info_hash: Arc<Vec<u8>>
+    pub info_hash: Arc<Vec<u8>>,
+    pub export_paths: Vec<PathBuf>
 }
 
 pub struct Orchestrator;
 impl Orchestrator {
     pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
         let now = Instant::now();
+
+        // Make sure we don't have duplicate torrents
+        let mut hashes = Vec::new();
+        for torrent in options.torrents.iter() {
+            if hashes.contains(torrent.info_hash.as_ref()) {
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Passed torrent {} more than once. The input list to the orchestrator must be unique.", Orchestrator::get_sha1_hexdigest(&torrent.info_hash))))?
+            }
+
+            hashes.push(torrent.info_hash.clone());
+        }
+        drop(hashes);
+
+        // Setup work
+        let work = Orchestrator::make_piece_list(&options.torrents, &options.export_directory);
+
+        // Validate entries
+        // Solvers will weigh the identical paths as higher, and writer will skip any parts that have already been written
+        for entry in work.iter() {
+            for (export_path, file_entry) in entry.export_paths.iter().zip(entry.piece.files.iter()) {
+                let expected_file_length = file_entry.file_length;
+
+                if !export_path.exists() {
+                    continue;
+                }
+
+                let handle = File::open(export_path)?;
+                if handle.metadata()?.len() != expected_file_length {
+                    Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file does not match the file length in the piece. Aborting to prevent accidental data loss."))?
+                }
+            }
+        }
 
         // Setup the finder
         let finder = Arc::new(Orchestrator::setup_finder(&options.torrents, &options));
@@ -34,18 +66,16 @@ impl Orchestrator {
             .map(|torrent| torrent.info.pieces.len())
             .sum();
 
-        let writer = PieceWriter::new(piece_count, &options.export_directory, &options.torrents);
+        let writer = PieceWriter::new(piece_count);
         let writer = Arc::new(writer);
 
         // Partition Pieces
-        let (singles, multiple) = Orchestrator::make_piece_list(&options.torrents);
+        let (singles, multiple) = Orchestrator::partition_piece_list(work);
 
         // Start!
-        let single_piece_map = Orchestrator::make_single_piece_map(singles);
-        let single_piece_map_as_list: Vec<_> = single_piece_map.into_iter().collect();
-
+        let single_pieces_partitioned_by_hash = Orchestrator::partition_single_pieces_by_path_and_length(singles);
         let single_solver = SinglePieceSolver::new(writer.clone(), finder.clone());
-        single_solver.start(single_piece_map_as_list, options.threads)?;
+        single_solver.start(single_pieces_partitioned_by_hash, options.threads)?;
 
         println!(
             "Single File Orchestrator finished at {} seconds.",
@@ -95,37 +125,53 @@ impl Orchestrator {
         finder
     }
 
-    fn make_piece_list(torrents: &[Torrent]) -> (Vec<OrchestratorPiece>, Vec<OrchestratorPiece>) {
+    fn partition_piece_list(work: Vec<OrchestratorPiece>) -> (Vec<OrchestratorPiece>, Vec<OrchestratorPiece>) {
         let mut singles = Vec::new();
         let mut multiple = Vec::new();
 
-        for torrent in torrents {
-            let pieces = Pieces::from_torrent(torrent);
-            let info_hash = Arc::new(torrent.info_hash.clone());
-
-            for piece in pieces {
-                let matchable = OrchestratorPiece {
-                    piece: piece,
-                    result: None,
-                    info_hash: info_hash.clone()
-                };
-
-                if matchable.piece.files.len() == 1 {
-                    singles.push(matchable);
-                } else {
-                    multiple.push(matchable);
-                }
+        for entry in work {
+            if entry.piece.files.len() == 1 {
+                singles.push(entry);
+            } else {
+                multiple.push(entry);
             }
         }
 
         (singles, multiple)
     }
 
+    fn make_piece_list(torrents: &[Torrent], export_directory: &Path) -> Vec<OrchestratorPiece> {
+        let mut results = Vec::new();
+
+        for torrent in torrents {
+            let pieces = Pieces::from_torrent(torrent);
+            let info_hash = Arc::new(torrent.info_hash.clone());
+
+            for piece in pieces {
+                let mut export_paths: Vec<PathBuf> = Vec::new();
+                for file in piece.files.iter() {
+                    export_paths.push(Orchestrator::format_path(file, torrent, export_directory));
+                }
+
+                let matchable = OrchestratorPiece {
+                    piece: piece,
+                    result: None,
+                    info_hash: info_hash.clone(),
+                    export_paths
+                };
+                
+                results.push(matchable);
+            }
+        }
+
+        results
+    }
+
     // Only use this with single pieces!
-    fn make_single_piece_map(pieces: Vec<OrchestratorPiece>) -> HashMap<u64, Vec<OrchestratorPiece>> {
+    fn partition_single_pieces_by_length(work: Vec<OrchestratorPiece>) -> HashMap<u64, Vec<OrchestratorPiece>> {
         let mut single_files: HashMap<u64, Vec<OrchestratorPiece>> = HashMap::new();
 
-        for orchestrator_piece in pieces {
+        for orchestrator_piece in work {
             let file = orchestrator_piece.piece.files.first().unwrap();
             let length = file.file_length;
 
@@ -136,5 +182,45 @@ impl Orchestrator {
         }
 
         single_files
+    }
+
+    fn partition_single_pieces_by_path_and_length(work: Vec<OrchestratorPiece>) -> Vec<Vec<OrchestratorPiece>> {
+        let mut total = Vec::new();
+
+        for (_, value) in Orchestrator::partition_single_pieces_by_length(work) {
+            let mut partitioned: HashMap<PathBuf, Vec<OrchestratorPiece>> = HashMap::new();
+
+            for orchestrator_piece in value {
+                partitioned.entry(orchestrator_piece.export_paths.first().unwrap().clone()).or_default();
+    
+                let items = partitioned.get_mut(orchestrator_piece.export_paths.first().unwrap()).unwrap();
+                items.push(orchestrator_piece);
+            }
+    
+            total.extend(partitioned.into_iter().map(|(_, v)| v))
+        }
+        
+        total
+    }
+
+    fn format_path(file: &PieceFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {
+        let data = Path::new("Data");
+        let info_hash_as_human = Orchestrator::get_sha1_hexdigest(&torrent.info_hash);
+        let info_hash_path = Path::new(&info_hash_as_human);
+        let torrent_name = Path::new(&torrent.info.name);
+
+        if torrent.info.files.is_some() {
+            [export_directory, info_hash_path, data, torrent_name, file.file_path.as_path()].iter().collect()
+        } else {
+            [export_directory, info_hash_path, data, file.file_path.as_path()].iter().collect()
+        }
+    }
+
+    fn get_sha1_hexdigest(bytes: &[u8]) -> String {
+        let mut output = String::new();
+        for byte in bytes {
+            write!(&mut output, "{:02x?}", byte).expect("Unable to write");
+        }
+        output
     }
 }

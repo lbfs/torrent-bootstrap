@@ -83,7 +83,6 @@ impl MultiplePieceSolver {
         let mut loaded = HashMap::new();
 
         for (file_position, file) in piece.files.iter().enumerate() {
-
             let mut results: Vec<(&'a PathBuf, Vec<u8>)> = Vec::new();
             let entries = finder.find_length(file.file_length);
 
@@ -92,20 +91,23 @@ impl MultiplePieceSolver {
             // Sort by filename so that we check matching filenames first before checking 
             // other random files.
             entries.sort_by(|a, b| {
-                let mut a_1 = a.ends_with(&file.file_path) as usize;
-                let mut b_1 = b.ends_with(&file.file_path) as usize;
+                let mut left = a.ends_with(&file.file_path) as usize;
+                let mut right = b.ends_with(&file.file_path) as usize;
 
+                left += (*a).eq(&file.file_path) as usize;
+                right += (*b).eq(&file.file_path) as usize;
+                
                 if let Some(source) = file.file_path.file_name() {
-                    if let Some(a_filename) = a.file_name() {
-                        a_1 += source.cmp(a_filename).is_eq() as usize;
+                    if let Some(left_filename) = a.file_name() {
+                        left += source.cmp(left_filename).is_eq() as usize;
                     }
     
-                    if let Some(b_filename) = b.file_name() {
-                        b_1 += source.cmp(b_filename).is_eq() as usize;
+                    if let Some(right_filename) = b.file_name() {
+                        right += source.cmp(right_filename).is_eq() as usize;
                     }
                 }
 
-                a_1.cmp(&b_1).reverse()
+                left.cmp(&right).reverse()
             });
 
             // De-duplicate identical files if the file has already been seen.
