@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, LengthFileFinder},orchestrator::OrchestratorPiece, writer::PieceWriter};
+use crate::{finder::{read_bytes, sort_by_target_absolute_path, LengthFileFinder},orchestrator::OrchestratorPiece, writer::PieceWriter};
 
 use super::{PieceMatchResult, Solver};
 
@@ -34,29 +34,7 @@ impl Solver<Vec<OrchestratorPiece>, std::io::Error> for SinglePieceSolver {
         let file_path = &work.first().unwrap().piece.files.first().unwrap().file_path;
 
         let entries = self.finder.find_length(file_length);
-        let mut entries: Vec<&PathBuf> = entries.iter().collect();
-
-        // Sort by filename so that we check matching filenames first before checking 
-        // other random files.
-        entries.sort_by(|a, b| {
-            let mut left = a.ends_with(file_path) as usize;
-            let mut right = b.ends_with(file_path) as usize;
-
-            left += (*a).eq(file_path) as usize;
-            right += (*b).eq(file_path) as usize;
-            
-            if let Some(source) = file_path.file_name() {
-                if let Some(left_filename) = a.file_name() {
-                    left += source.cmp(left_filename).is_eq() as usize;
-                }
-
-                if let Some(right_filename) = b.file_name() {
-                    right += source.cmp(right_filename).is_eq() as usize;
-                }
-            }
-
-            left.cmp(&right).reverse()
-        });
+        let entries = sort_by_target_absolute_path(file_path, entries);
 
         // Evaluate
         for path in entries {

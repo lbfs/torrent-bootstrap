@@ -2,7 +2,7 @@ use std::{cmp::min, collections::HashMap, path::PathBuf, sync::Arc};
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, LengthFileFinder}, orchestrator::OrchestratorPiece, torrent::Piece, writer::PieceWriter};
+use crate::{finder::{read_bytes, sort_by_target_absolute_path, LengthFileFinder}, orchestrator::OrchestratorPiece, torrent::Piece, writer::PieceWriter};
 
 use super::{PieceMatchResult, Solver};
 
@@ -85,30 +85,7 @@ impl MultiplePieceSolver {
         for (file_position, file) in piece.files.iter().enumerate() {
             let mut results: Vec<(&'a PathBuf, Vec<u8>)> = Vec::new();
             let entries = finder.find_length(file.file_length);
-
-            let mut entries: Vec<&'a PathBuf> = entries.iter().collect();
-
-            // Sort by filename so that we check matching filenames first before checking 
-            // other random files.
-            entries.sort_by(|a, b| {
-                let mut left = a.ends_with(&file.file_path) as usize;
-                let mut right = b.ends_with(&file.file_path) as usize;
-
-                left += (*a).eq(&file.file_path) as usize;
-                right += (*b).eq(&file.file_path) as usize;
-                
-                if let Some(source) = file.file_path.file_name() {
-                    if let Some(left_filename) = a.file_name() {
-                        left += source.cmp(left_filename).is_eq() as usize;
-                    }
-    
-                    if let Some(right_filename) = b.file_name() {
-                        right += source.cmp(right_filename).is_eq() as usize;
-                    }
-                }
-
-                left.cmp(&right).reverse()
-            });
+            let entries = sort_by_target_absolute_path(&file.file_path, entries);
 
             // De-duplicate identical files if the file has already been seen.
             'inner: for entry in entries {
