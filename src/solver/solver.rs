@@ -69,13 +69,6 @@ pub trait Solver<T: Sync + Send + 'static, E: Sync + Send + 'static>
                         }
 
                         if other_guards.len() > 0 {
-                            // Sort other threads by those that do not have work first.
-                            // Give them work first, so that they don't waste time doing their own re-balance.
-                            // We know the other threads are most-likely working an item already.
-                            other_guards.sort_by(|a, b| {
-                                a.as_ref().unwrap().len().cmp(&b.as_ref().unwrap().len())
-                            });
-
                             // Count available work
                             let mut remaining_work = guard.as_ref().unwrap().len();
                             for other_guard in other_guards.iter() {
