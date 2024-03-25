@@ -126,11 +126,18 @@ impl Torrent {
         }
 
         let length = if let Ok(length) = length {
-            Some(length.evaluate().map_err(|err| Torrent::convert_error(err))?)
+            let length = length.evaluate().map_err(|err| Torrent::convert_error(err))?;
+            Some(length)
         } else { None };
 
         let files = if let Ok(files) = files {
-            Some(Torrent::evaluate_files(files)?)
+            let files = Torrent::evaluate_files(files)?;
+
+            if files.len() == 0 {
+                return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Files has no entries. One file must be present.")));
+            }
+
+            Some(files)
         } else { None };
 
         // Optional
@@ -214,7 +221,7 @@ impl Torrent {
             .map_err(|err| Torrent::convert_error(err))?
             .evaluate::<u64>()
             .map_err(|err| Torrent::convert_error(err))?;
-    
+
         let paths = file.find_list_value("path")
             .map_err(|err| Torrent::convert_error(err))?;
 
@@ -233,6 +240,10 @@ impl Torrent {
                     return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in path list. Expected a string token.".to_string()));
                 }
             }
+        }
+
+        if result_paths.len() == 0 {
+            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("File cannot have an empty path.")));
         }
 
         Ok(File {
