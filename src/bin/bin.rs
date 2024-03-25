@@ -1,14 +1,7 @@
 use std::{fs::File, io::Read, path::{Path, PathBuf}, time::Instant};
 
-use crate::{orchestrator::{Orchestrator, OrchestratorOptions}, torrent::Torrent};
 use clap::Parser;
-
-mod finder;
-mod torrent;
-mod orchestrator;
-mod bencode;
-mod writer;
-mod solver;
+use torrent_bootstrap::{Orchestrator, OrchestratorOptions, Torrent};
 
 #[derive(Parser)] // requires `derive` feature
 #[command(version, about, long_about = None)]

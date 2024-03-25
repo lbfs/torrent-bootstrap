@@ -9,3 +9,11 @@ edition = "2021"
 clap = { version = "4.5.3", features = ["derive"] }
 sha1 = "0.10.6"
 walkdir = "2.3.3"
+
+[lib]
+name = "torrent_bootstrap"
+path = "src/lib.rs"
+
+[[bin]]
+name = "torrent_bootstrap"
+path = "src/bin/bin.rs" # replace bin.rs with name of your file
