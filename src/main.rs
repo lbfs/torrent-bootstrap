@@ -13,19 +13,19 @@ mod solver;
 #[derive(Parser)] // requires `derive` feature
 #[command(version, about, long_about = None)]
 struct Cli {
-    // Path that should be used to load a torrent
+    /// Path that should be used to load a torrent
     #[arg(long, required = true, num_args = 1..)]
     torrents: Vec<String>,
 
-    // Absolute path that should be scanned to find identical pieces
+    /// Absolute path that should be scanned to find identical pieces
     #[arg(long, required = true, num_args = 1..)]
     scan: Vec<String>,
 
-    // Absolute path where the merged or updated file should be placed.
+    /// Absolute path where the merged or updated file should be placed.
     #[arg(long, required = true)]
     export: String,
 
-    // Number of threads to perform scanning and hashing.
+    /// Number of threads to perform scanning and hashing.
     #[arg(long, required = true)]
     threads: usize,
 }
