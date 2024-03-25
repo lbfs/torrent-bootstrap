@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use sha1::{Digest, Sha1};
 
@@ -32,9 +32,10 @@ impl Solver<Vec<OrchestratorPiece>, std::io::Error> for SinglePieceSolver {
         // Get first entry and use it to determine the current file length
         let file_length = work.first().unwrap().piece.files.first().unwrap().file_length;
         let file_path = &work.first().unwrap().piece.files.first().unwrap().file_path;
+        let export_path = work.first().unwrap().export_paths.first().unwrap();
 
         let entries = self.finder.find_length(file_length);
-        let entries = sort_by_target_absolute_path(file_path, entries);
+        let entries = sort_by_target_absolute_path(file_path, export_path, entries);
 
         // Evaluate
         for path in entries {

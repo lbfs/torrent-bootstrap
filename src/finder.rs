@@ -66,19 +66,19 @@ pub(crate) fn read_bytes(
     Ok(read_bytes)
 }
 
-pub(crate) fn sort_by_target_absolute_path<'a>(target: &Path, entries: &'a [PathBuf]) -> Vec<&'a PathBuf> {
+pub(crate) fn sort_by_target_absolute_path<'a>(partial_target: &Path, full_target: &Path, entries: &'a [PathBuf]) -> Vec<&'a PathBuf> {
     let mut entries: Vec<&PathBuf> = entries.iter().collect();
 
     // Sort by filename so that we check most-matching path first before checking 
     // other random files.
     entries.sort_by(|a, b| {
-        let mut left = a.ends_with(target) as usize;
-        let mut right = b.ends_with(target) as usize;
+        let mut left = a.ends_with(partial_target) as usize;
+        let mut right = b.ends_with(partial_target) as usize;
 
-        left += (*a).eq(target) as usize;
-        right += (*b).eq(target) as usize;
+        left += (*a).eq(full_target) as usize;
+        right += (*b).eq(full_target) as usize;
         
-        if let Some(source) = target.file_name() {
+        if let Some(source) = partial_target.file_name() {
             if let Some(left_filename) = a.file_name() {
                 left += source.cmp(left_filename).is_eq() as usize;
             }

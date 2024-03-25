@@ -22,21 +22,21 @@ impl MultiplePieceSolver {
 
     fn scan(
         finder: &LengthFileFinder,
-        piece: &Piece,
+        work: &OrchestratorPiece,
     ) -> Result<Option<PieceMatchResult>, std::io::Error> {
         // Check if we have at-minimum 1 match that can be made.
-        for file in piece.files.iter() {
+        for file in work.piece.files.iter() {
             if finder.find_length(file.file_length).len() == 0 {
                 return Ok(None);
             }
         }
 
         // Start scanning
-        let mut paths: Vec<&PathBuf> = Vec::with_capacity(piece.files.len());
-        let mut bytes: Vec<u8> = Vec::with_capacity(piece.length as usize);
-        let loaded = MultiplePieceSolver::preload(piece, finder)?;
+        let mut paths: Vec<&PathBuf> = Vec::with_capacity(work.piece.files.len());
+        let mut bytes: Vec<u8> = Vec::with_capacity(work.piece.length as usize);
+        let loaded = MultiplePieceSolver::preload(work, finder)?;
 
-        if MultiplePieceSolver::scan_internal(&mut paths, &mut bytes, &loaded, piece)? {
+        if MultiplePieceSolver::scan_internal(&mut paths, &mut bytes, &loaded, &work.piece)? {
             let paths: Vec<PathBuf> = paths.into_iter().cloned().collect();
 
             return Ok(Some(PieceMatchResult {
@@ -79,13 +79,15 @@ impl MultiplePieceSolver {
         Ok(false)
     }
 
-    fn preload<'a>(piece: &Piece, finder: &'a LengthFileFinder) -> Result<HashMap<usize, Vec<(&'a PathBuf, Vec<u8>)>>, std::io::Error> {
+    fn preload<'a>(work: &OrchestratorPiece, finder: &'a LengthFileFinder) -> Result<HashMap<usize, Vec<(&'a PathBuf, Vec<u8>)>>, std::io::Error> {
         let mut loaded = HashMap::new();
 
-        for (file_position, file) in piece.files.iter().enumerate() {
+        for (file_position, file) in work.piece.files.iter().enumerate() {
             let mut results: Vec<(&'a PathBuf, Vec<u8>)> = Vec::new();
             let entries = finder.find_length(file.file_length);
-            let entries = sort_by_target_absolute_path(&file.file_path, entries);
+
+            let export_directory = work.export_paths.get(file_position).unwrap();
+            let entries = sort_by_target_absolute_path(&file.file_path, export_directory, entries);
 
             // De-duplicate identical files if the file has already been seen.
             'inner: for entry in entries {
@@ -109,7 +111,7 @@ impl MultiplePieceSolver {
 
 impl Solver<OrchestratorPiece, std::io::Error> for MultiplePieceSolver {
     fn solve(&self, mut work: OrchestratorPiece) -> Result<(), std::io::Error> {
-        work.result = MultiplePieceSolver::scan(&self.finder, &work.piece)?;
+        work.result = MultiplePieceSolver::scan(&self.finder, &work)?;
         self.writer.write(work)
     }
 

@@ -34,12 +34,15 @@ impl PieceWriter {
             for (index, piece_file) in piece.files.iter().enumerate() {
                 let end_position = start_position + piece_file.read_length;
                 let export_path = orchestrator_piece.export_paths.get(index).unwrap();
-                fs::create_dir_all(export_path.parent().unwrap())?;
 
-                let mut handle = OpenOptions::new().write(true).create(true).open(&export_path)?;
-                handle.set_len(piece_file.file_length)?;
-                handle.seek(SeekFrom::Start(piece_file.read_start_position))?;
-                handle.write_all(&result.bytes[(start_position as usize)..(end_position as usize)])?;
+                if !export_path.eq(result.paths.get(index).unwrap()) {
+                    fs::create_dir_all(export_path.parent().unwrap())?;
+
+                    let mut handle = OpenOptions::new().write(true).create(true).open(&export_path)?;
+                    handle.set_len(piece_file.file_length)?;
+                    handle.seek(SeekFrom::Start(piece_file.read_start_position))?;
+                    handle.write_all(&result.bytes[(start_position as usize)..(end_position as usize)])?;
+                }
 
                 start_position = end_position;
             }
