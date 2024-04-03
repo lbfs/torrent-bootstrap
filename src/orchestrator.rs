@@ -63,7 +63,16 @@ impl Orchestrator {
         }
         drop(hashes);
 
+        // Setup the finder
+        let finder = Arc::new(Orchestrator::setup_finder(&options.torrents, &options));
+
+        println!(
+            "File finder finished caching and finished at {} seconds.",
+            now.elapsed().as_secs()
+        );
+
         // Setup work
+        // TOOD: Excessive memory usage is here.
         let work = Orchestrator::convert_pieces_to_work(&options.torrents, &options.export_directory);
 
         // Validate entries
@@ -82,14 +91,6 @@ impl Orchestrator {
                 }
             }
         }
-
-        // Setup the finder
-        let finder = Arc::new(Orchestrator::setup_finder(&options.torrents, &options));
-
-        println!(
-            "File finder finished caching and finished at {} seconds.",
-            now.elapsed().as_secs()
-        );
 
         // Setup Writer
         let piece_count = options.torrents

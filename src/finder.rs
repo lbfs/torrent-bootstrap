@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet}, fs::File, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}
+    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}
 };
 use walkdir::WalkDir;
 
@@ -15,31 +15,20 @@ impl LengthFileFinder {
     }
 
     pub fn add(&mut self, lengths: &[u64], scan_directory: &Path) {
-        let entries = WalkDir::new(scan_directory)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file() && lengths.contains(&(e.metadata().unwrap().len())));
-
-        // Create a temporary cache for storing the matches with the matches entries.
-        let mut matches: HashMap<u64, HashSet<PathBuf>> = HashMap::new();
-        for entry in entries {
-            let length = entry.metadata().unwrap().len();
-
-            matches.entry(length).or_default();
-            
-            let items = matches.get_mut(&length).unwrap();
-            items.insert(entry.into_path());
-        }
-
-        // Add entries from temporary cache into struct cache
-        for (length, mut entries) in matches.into_iter() {
-            let previous = match self.cache.remove(&length) {
-                Some(value) => value,
-                None => Vec::new()
-            };
-
-            entries.extend(previous);
-            self.cache.insert(length, entries.into_iter().collect());
+        for result in WalkDir::new(scan_directory) {
+            if let Ok(result) = result {
+                if result.file_type().is_file() && lengths.contains(&(result.metadata().unwrap().len())) {
+                    let length = result.metadata().unwrap().len();
+                    self.cache.entry(length).or_default();
+                
+                    let items = self.cache.get_mut(&length).unwrap();
+                    let path = result.into_path();
+        
+                    if !items.contains(&path) {
+                        items.push(path);
+                    }
+                }
+            }
         }
     }
 
