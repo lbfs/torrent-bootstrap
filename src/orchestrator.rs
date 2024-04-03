@@ -1,6 +1,6 @@
-use std::{collections::HashMap, fmt::Write, fs::File, path::{Path, PathBuf}, sync::Arc, time::Instant};
+use std::{collections::HashMap, fs::File, path::{Path, PathBuf}, sync::Arc, time::Instant};
 
-use crate::{finder::LengthFileFinder, solver::{MultiplePieceSolver, SinglePieceSolver, Solver}, torrent::{PieceFile, Pieces, Torrent}, writer::PieceWriter};
+use crate::{finder::LengthFileFinder, get_sha1_hexdigest, solver::{MultiplePieceSolver, SinglePieceSolver, Solver}, torrent::{PieceFile, Pieces, Torrent}, writer::PieceWriter};
 
 pub struct OrchestratorOptions {
     pub torrents: Vec<Torrent>,
@@ -56,7 +56,7 @@ impl Orchestrator {
         let mut hashes = Vec::new();
         for torrent in options.torrents.iter() {
             if hashes.contains(torrent.info_hash.as_ref()) {
-                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Passed torrent {} more than once. The input list to the orchestrator must be unique.", Orchestrator::get_sha1_hexdigest(&torrent.info_hash))))?
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Passed torrent {} more than once. The input list to the orchestrator must be unique.", get_sha1_hexdigest(&torrent.info_hash))))?
             }
 
             hashes.push(torrent.info_hash.clone());
@@ -265,7 +265,7 @@ impl Orchestrator {
 
     fn format_path(file: &PieceFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {
         let data = Path::new("Data");
-        let info_hash_as_human = Orchestrator::get_sha1_hexdigest(&torrent.info_hash);
+        let info_hash_as_human = get_sha1_hexdigest(&torrent.info_hash);
         let info_hash_path = Path::new(&info_hash_as_human);
         let torrent_name = Path::new(&torrent.info.name);
 
@@ -274,13 +274,5 @@ impl Orchestrator {
         } else {
             [export_directory, info_hash_path, data, file.file_path.as_path()].iter().collect()
         }
-    }
-
-    fn get_sha1_hexdigest(bytes: &[u8]) -> String {
-        let mut output = String::new();
-        for byte in bytes {
-            write!(&mut output, "{:02x?}", byte).expect("Unable to write");
-        }
-        output
     }
 }

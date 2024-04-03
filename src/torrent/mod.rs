@@ -6,3 +6,4 @@ mod info;
 pub use torrent::*;
 pub use pieces::*;
 pub use error::*;
+pub use info::*;

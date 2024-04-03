@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{fmt::Write as FmtWrite, io::Write as IoWrite};
 
 use sha1::{Digest, Sha1};
 
@@ -50,4 +50,12 @@ pub fn calculate_info_hash(info: &BencodeDictionary) -> Vec<u8> {
     let mut hasher = Sha1::new();
     hash_dictionary(info, &mut hasher);
     hasher.finalize().to_vec()
+}
+
+pub fn get_sha1_hexdigest(bytes: &[u8]) -> String {
+    let mut output = String::new();
+    for byte in bytes {
+        write!(&mut output, "{:02x?}", byte).expect("Unable to write");
+    }
+    output
 }
