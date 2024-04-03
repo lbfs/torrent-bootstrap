@@ -7,8 +7,7 @@ use super::{error::BencodeErrorKind, BencodeError};
 pub struct BencodeString {
     pub value: Vec<u8>,
     pub start_position: usize,
-    pub end_position: usize,
-    pub(super) continuation_position: usize
+    pub continuation_position: Option<usize>
 }
 
 impl BencodeString {
@@ -20,10 +19,9 @@ impl BencodeString {
 
 #[derive(Debug, Clone)]
 pub struct BencodeInteger {
-    pub(super) value: Vec<u8>,
+    pub value: Vec<u8>,
     pub start_position: usize,
-    pub end_position: usize,
-    pub(super) continuation_position: usize
+    pub continuation_position: Option<usize>
 }
 
 impl BencodeInteger {
@@ -40,16 +38,14 @@ impl BencodeInteger {
 pub struct BencodeList {
     pub value: Vec<BencodeToken>,
     pub start_position: usize,
-    pub end_position: usize,
-    pub(super) continuation_position: usize
+    pub continuation_position: Option<usize>
 }
 
 #[derive(Debug, Clone)]
 pub struct BencodeDictionary {
     pub value: Vec<(BencodeString, BencodeToken)>,
     pub start_position: usize,
-    pub end_position: usize,
-    pub(super) continuation_position: usize
+    pub continuation_position: Option<usize>
 }
 
 #[derive(Debug, Clone)]

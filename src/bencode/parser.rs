@@ -1,3 +1,6 @@
+use std::io::Bytes;
+use std::io::Read;
+
 use super::error::BencodeErrorKind;
 use super::BencodeToken;
 use super::BencodeDictionary;
@@ -5,7 +8,6 @@ use super::BencodeList;
 use super::BencodeString;
 use super::BencodeError;
 use super::BencodeInteger;
-
 
 #[derive(Debug)]
 enum StringState {
@@ -36,6 +38,79 @@ enum DictionaryState {
     ValueEntry
 }
 
+// Iterator that allows you to query the current element multiple times.
+struct RevisitableIterator<T> {
+    byte: Option<u8>,
+    position: Option<usize>,
+    iterator: Bytes<T>
+}
+
+impl<T: Read> RevisitableIterator<T> {
+    pub fn new(reader: T) -> Result<RevisitableIterator<T>, BencodeError> {
+        let bytes = reader.bytes();
+
+        let position = None;
+        let byte = None;
+
+        let mut iterator = RevisitableIterator {
+            byte,
+            position,
+            iterator: bytes,
+        };
+
+        iterator.advance_init()?;
+        Ok(iterator)
+    }
+
+    pub fn current_byte(&self) -> Option<u8> {
+        self.byte
+    }
+
+    pub fn current_position(&self) -> Option<usize> {
+        self.position
+    }
+
+    // Special case for the first iterator read where position should always be 0
+    fn advance_init(&mut self) -> Result<Option<u8>, BencodeError> {
+        match self.iterator.next() {
+            Some(value) => {
+                let byte = 
+                    value.map_err(|e| BencodeError::new(BencodeErrorKind::MalformedData, e.to_string()))?;
+
+                self.position = Some(0);
+                self.byte = Some(byte);
+                Ok(Some(byte))
+            }
+            None => {
+                self.byte = None;
+                self.position = None;
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn advance(&mut self) -> Result<Option<u8>, BencodeError> {
+        match self.iterator.next() {
+            Some(value) => {
+                let byte = 
+                    value.map_err(|e| BencodeError::new(BencodeErrorKind::MalformedData, e.to_string()))?;
+
+                let position = self.position.unwrap();
+                let position = position + 1;
+
+                self.byte = Some(byte);
+                self.position = Some(position);
+                Ok(Some(byte))
+            }   
+            None => {
+                self.byte = None;
+                self.position = None;
+                Ok(None)
+            }
+        }
+    }
+}
+
 /**
  * Reference: http://bittorrent.org/beps/bep_0003.html
  * Strings are length-prefixed base ten followed by a colon and the string. For example 4:spam corresponds to 'spam'.
@@ -45,42 +120,34 @@ enum DictionaryState {
 */
 pub struct Parser;
 impl Parser {
-    pub fn decode(bytes: &[u8]) -> Result<BencodeToken, BencodeError> {
-        let token = Parser::decode_at_position(bytes, 0)?;
-        let continuation_position = Parser::get_continuation_position(&token);
+    pub fn from_reader<T: Read>(reader: T) -> Result<BencodeToken, BencodeError> {
+        let mut iterator = RevisitableIterator::new(reader)?;
+        let token = Parser::decode_any(&mut iterator)?;
 
-        if continuation_position != bytes.len() {
-            return Err(BencodeError::new(BencodeErrorKind::MalformedData, "Unexpected end of file. Token continuation position is not at the end of the bytes array.".to_string()));
+        if let Some(_) = iterator.current_byte() {
+            return Err(BencodeError::new(BencodeErrorKind::MalformedData, "Parser did not evaluate all elements of the byte stream. Results may be incomplete or wrong.".to_string()))
         }
 
         Ok(token)
     }
 
-    fn decode_at_position(bytes: &[u8], start_position: usize) -> Result<BencodeToken, BencodeError> {
-        if start_position >= bytes.len() { 
-            return Err(BencodeError::new(BencodeErrorKind::MalformedData, "Start position exceeds provided byte string boundaries.".to_string()));
-        }
-    
-        match bytes[start_position] {
-            b'0'..=b'9' => Ok(BencodeToken::String(Parser::decode_string(bytes, start_position)?)),
-            b'i' => Ok(BencodeToken::Integer(Parser::decode_integer(bytes, start_position)?)),
-            b'l' => Ok(BencodeToken::List(Parser::decode_list(bytes, start_position)?)),
-            b'd' => Ok(BencodeToken::Dictionary(Parser::decode_dictionary(bytes, start_position)?)),
-            _ => { Err(BencodeError::new(BencodeErrorKind::MalformedData, "Unexpected character when detecting type to evaluate".to_string())) }
+    fn decode_any<T: Read>(iterator: &mut RevisitableIterator<T>) -> Result<BencodeToken, BencodeError> {
+        match iterator.current_byte() {
+            Some(byte) => {
+                match byte {
+                    b'0'..=b'9' => Ok(BencodeToken::String(Parser::decode_string(iterator)?)),
+                    b'i' => Ok(BencodeToken::Integer(Parser::decode_integer(iterator)?)),
+                    b'l' => Ok(BencodeToken::List(Parser::decode_list(iterator)?)),
+                    b'd' => Ok(BencodeToken::Dictionary(Parser::decode_dictionary(iterator)?)),
+                    _ => { Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character at position {}", iterator.current_position().unwrap()))) }
+                }
+            }
+            None => Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of file at position {}", iterator.current_position().unwrap())))
         }
     }
 
-    fn get_continuation_position(token: &BencodeToken) -> usize {
-        match token {
-            BencodeToken::String(value) => value.continuation_position,
-            BencodeToken::List(value) => value.continuation_position,
-            BencodeToken::Integer(value) => value.continuation_position,
-            BencodeToken::Dictionary(value) => value.continuation_position,
-        }
-    }
-    
-    fn decode_string(bytes: &[u8], start_position: usize) -> Result<BencodeString, BencodeError> {
-        let mut position: usize = start_position;
+    fn decode_string<T: Read>(iterator: &mut RevisitableIterator<T>) -> Result<BencodeString, BencodeError> {
+        let start_position = iterator.current_position().unwrap();
         let mut state = StringState::FirstDigit;
 
         let mut length_buffer: Vec<u8> = Vec::new();
@@ -88,26 +155,26 @@ impl Parser {
         let characters_to_read: usize;
 
         loop {
-            if position >= bytes.len() {
-                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+            if let None = iterator.current_byte() {
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream starting from position {}.", start_position)));
             }
     
-            let byte = bytes[position];
+            let byte = iterator.current_byte().unwrap();
             match byte {
                 b'0' if matches!(state, StringState::FirstDigit) => {
                     length_buffer.push(byte);
                     state = StringState::Separator;
-                    position += 1;
+
+                    iterator.advance()?;
                 },
                 b'1'..=b'9' if matches!(state, StringState::FirstDigit) => {
                     length_buffer.push(byte);
                     state = StringState::Digit;
-                    position += 1;
+                    iterator.advance()?;
                 },
                 b'0'..=b'9' if matches!(state, StringState::Digit) => {
                     length_buffer.push(byte);
-                    position += 1;
-                    
+                    iterator.advance()?;
                 },
                 b':' if matches!(state, StringState::Digit) || matches!(state, StringState::Separator) => {
                     characters_to_read = std::str::from_utf8(&length_buffer)
@@ -115,44 +182,44 @@ impl Parser {
                         .parse::<usize>()
                         .map_err(|err| BencodeError::new(BencodeErrorKind::MalformedData, err.to_string()))?;
 
-                    position += 1;
+                    iterator.advance()?;
                     break;
                 },
                 _ => {
-                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character in bytes at position {} with character {} with state {:#?}", position, bytes[position], state)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character at position {}", iterator.current_position().unwrap())));
                 }
             }
         }
 
         while character_buffer.len() < characters_to_read {
-            if position >= bytes.len() {
-                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+            if let None = iterator.current_byte() {
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream starting from position {}.", start_position)));
             }
     
-            let byte = bytes[position];
+            let byte = iterator.current_byte().unwrap();
             character_buffer.push(byte);
-            position += 1;
+            iterator.advance()?;
         }
 
         Ok(BencodeString {
             start_position,
-            end_position: position - 1,
-            continuation_position: position,
+            continuation_position: iterator.current_position(),
             value: character_buffer
         })
     }
 
-    fn decode_integer(bytes: &[u8], start_position: usize) -> Result<BencodeInteger, BencodeError> {
-        let mut position: usize = start_position;
+    fn decode_integer<T: Read>(iterator: &mut RevisitableIterator<T>) -> Result<BencodeInteger, BencodeError> {
+        let start_position = iterator.current_position().unwrap();
+
         let mut result: Vec<u8> = Vec::new();
         let mut state: IntegerState = IntegerState::Start;
     
         loop {
-            if position >= bytes.len() {
-                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+            if let None = iterator.current_byte() {
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream starting from position {}.", start_position)));
             }
     
-            let byte = bytes[position];
+            let byte = iterator.current_byte().unwrap();
             match byte {
                 b'i' if matches!(state, IntegerState::Start) => { state = IntegerState::FirstDigit; },
                 b'0' if matches!(state, IntegerState::FirstDigit) => {
@@ -175,80 +242,81 @@ impl Parser {
                     break;
                 },
                 _ => {
-                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character in bytes at position {} with character {} with state {:#?}", position, bytes[position], state)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character at position {}", iterator.current_position().unwrap())));
                 }
             }
 
-            position += 1;
+            iterator.advance()?;
         }
-    
+
+        iterator.advance()?;
+
         Ok(BencodeInteger {
             value: result,
             start_position,
-            end_position: position,
-            continuation_position: position + 1,
+            continuation_position: iterator.current_position(),
         })
     }
     
-    fn decode_list(bytes: &[u8], start_position: usize) -> Result<BencodeList, BencodeError> {
-        let mut position: usize = start_position;
+    fn decode_list<T: Read>(iterator: &mut RevisitableIterator<T>) -> Result<BencodeList, BencodeError> {
+        let start_position = iterator.current_position().unwrap();
+    
         let mut tokens: Vec<BencodeToken> = Vec::new();
         let mut state: ListState = ListState::Start;
     
         loop {
-            if position >= bytes.len() {
-                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+            if let None = iterator.current_byte() {
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream starting from position {}.", start_position)));
             }
     
-            let byte = bytes[position];
+            let byte = iterator.current_byte().unwrap();
             match byte {
                 b'l' if matches!(state, ListState::Start) => {
                     state = ListState::Entry;
-                    position += 1;
+                    iterator.advance()?;
                 }
                 b'0'..=b'9' | b'i' | b'l' | b'd' if matches!(state, ListState::Entry) => {
-                    let token = Parser::decode_at_position(bytes, position)?;
-                    position = Parser::get_continuation_position(&token);
+                    let token = Parser::decode_any(iterator)?;
                     tokens.push(token);
                 }
                 b'e' if matches!(state, ListState::Entry) => {
                     break;
                 }
                 _ => {
-                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character in bytes at position {}", position)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character at position {}", iterator.current_position().unwrap())));
                 }
             }
         }
     
+        iterator.advance()?;
+
         Ok(BencodeList {
             value: tokens,
             start_position,
-            end_position: position,
-            continuation_position: position + 1
+            continuation_position: iterator.current_position()
         })
     }
     
-    fn decode_dictionary(bytes: &[u8], start_position: usize) -> Result<BencodeDictionary, BencodeError> {
-        let mut position: usize = start_position;
+    fn decode_dictionary<T: Read>(iterator: &mut RevisitableIterator<T>) -> Result<BencodeDictionary, BencodeError> {
+        let start_position = iterator.current_position().unwrap();
         let mut state: DictionaryState = DictionaryState::Start;
 
         let mut keys: Vec<BencodeString> = Vec::new();
         let mut values: Vec<BencodeToken> = Vec::new();
 
         loop {
-            if position >= bytes.len() {
-                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream when parsing from start_position {}.", start_position)));
+            if let None = iterator.current_byte() {
+                return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of byte stream starting from position {}.", start_position)));
             }
     
-            let byte = bytes[position];
+            let byte = iterator.current_byte().unwrap();
             match byte {
                 b'd' if matches!(state, DictionaryState::Start) => {
                     state = DictionaryState::KeyEntry;
-                    position += 1;
+                    iterator.advance()?;
                 }
                 b'0'..=b'9' if matches!(state, DictionaryState::KeyEntry) => {
-                    let token = Parser::decode_string(bytes, position)?;
-                    position = token.continuation_position;
+                    let token = Parser::decode_string(iterator)?;
 
                     if keys.len() > 0 {
                         let last = keys.last().unwrap();
@@ -267,8 +335,7 @@ impl Parser {
                     state = DictionaryState::ValueEntry;
                 },
                 b'0'..=b'9' | b'i' | b'l' | b'd' if matches!(state, DictionaryState::ValueEntry) => {
-                    let value = Parser::decode_at_position(bytes, position)?;
-                    position = Parser::get_continuation_position(&value);
+                    let value = Parser::decode_any(iterator)?;
 
                     values.push(value);
                     state = DictionaryState::KeyEntry;
@@ -277,16 +344,17 @@ impl Parser {
                     break;
                 }
                 _ => {
-                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character in bytes at position {}", position)));
+                    return Err(BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character at position {}", iterator.current_position().unwrap())));
                 }
             }
         }
 
+        iterator.advance()?;
+
         Ok(BencodeDictionary {
             value: keys.into_iter().zip(values).collect(),
             start_position,
-            end_position: position,
-            continuation_position: position + 1,
+            continuation_position: iterator.current_position()
         })
     }
 

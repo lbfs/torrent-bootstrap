@@ -1,9 +1,8 @@
+use std::io::Read;
 use std::path::PathBuf;
 
-use sha1::{Digest, Sha1};
-
 use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeToken, Parser};
-use super::{error::TorrentErrorKind, TorrentError};
+use super::{error::TorrentErrorKind, info::calculate_info_hash, TorrentError};
 
 #[derive(Debug)]
 pub struct Torrent {
@@ -36,20 +35,20 @@ pub struct Info {
 
 // Converter
 impl Torrent {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Torrent, TorrentError> {
-        let token = match Parser::decode(bytes) {
+    pub fn from_reader<T: Read>(reader: T) -> Result<Torrent, TorrentError> {
+        let token = match Parser::from_reader(reader) {
             Ok(token) => token,
             Err(err) => return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message))),
         };
 
         if let BencodeToken::Dictionary(root) = token {
-            return Torrent::evaluate_root(&root, &bytes);
+            return Torrent::evaluate_root(&root);
         }
 
         Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Unexpected token at root. Expected dictionary token")))
     }
 
-    fn evaluate_root(root: &BencodeDictionary, bytes: &[u8]) -> Result<Torrent, TorrentError> {
+    fn evaluate_root(root: &BencodeDictionary) -> Result<Torrent, TorrentError> {
         // Required
         let announce = root.find_string_value("announce")
             .map_err(|err| Torrent::convert_error(err))?
@@ -61,7 +60,7 @@ impl Torrent {
             .map_err(|err| Torrent::convert_error(err))?;
 
         // Get Info Hash
-        let info_hash = Sha1::digest(&bytes[info.start_position..=info.end_position]).to_vec();
+        let info_hash = calculate_info_hash(info);
 
         // Evaluate Info
         let info = Torrent::evaluate_info(info)?;
