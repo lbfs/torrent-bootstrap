@@ -13,18 +13,18 @@ pub(crate) struct OrchestrationPieceFile {
     // Filled out when generating pieces
     pub read_length: u64,
     pub read_start_position: u64,
-    pub file_path: PathBuf,
+    pub file_path: Arc<PathBuf>,
     pub file_length: u64,
 
     // Filled out by orchestration
     pub bytes: Option<Vec<u8>>,
     pub source: Option<PathBuf>,
-    pub export: PathBuf
+    pub export: Arc<PathBuf>
 }
 
 pub(crate) struct OrchestrationPiece {
     pub files: Vec<OrchestrationPieceFile>,
-    pub hash: Vec<u8>
+    pub hash: Arc<Vec<u8>>
 }
 
 pub struct Orchestrator;
@@ -76,7 +76,7 @@ impl Orchestrator {
                     continue;
                 }
 
-                let handle = File::open(&file.export)?;
+                let handle = File::open(file.export.as_ref())?;
                 if handle.metadata()?.len() != expected_file_length {
                     Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file does not match the file length in the piece. Aborting to prevent accidental data loss."))?
                 }
@@ -190,23 +190,50 @@ impl Orchestrator {
 
         (singles, multiple)
     }
-
+    
     fn convert_pieces_to_work(torrents: &[Torrent], export_directory: &Path) -> Vec<OrchestrationPiece> {
         let mut results = Vec::new();
 
         for torrent in torrents {
             let pieces = Pieces::from_torrent(torrent);
 
+            let mut previous_path: Option<Arc<PathBuf>> = None;
+            let mut previous_export: Option<Arc<PathBuf>> = None;
+            let mut previous_hash: Option<Arc<Vec<u8>>> = None;
+
             for piece in pieces {
                 let mut orchestration_piece_files: Vec<OrchestrationPieceFile> = Vec::new();
 
                 for file in piece.files {
-                    let export = Orchestrator::format_path(&file, torrent, export_directory);
+                    // Cleanup this path interning logic
+                    // Previous export
+                    let mut export = Arc::new(Orchestrator::format_path(&file, torrent, export_directory));
+                    if let Some(previous_export_unpacked) = &previous_export {
+                        if !export.as_ref().cmp(previous_export_unpacked.as_ref()).is_eq() {
+                            previous_export = Some(export.clone());
+                        } else {
+                            export = previous_export_unpacked.clone();
+                        }
+                    } else {
+                        previous_export = Some(export.clone());
+                    }
+
+                    // Previous path
+                    let mut file_path = Arc::new(file.file_path);
+                    if let Some(previous_file_unpacked) = &previous_path {
+                        if !previous_file_unpacked.as_ref().cmp(file_path.as_ref()).is_eq()  {
+                            previous_path = Some(file_path.clone());
+                        } else {
+                            file_path = previous_file_unpacked.clone();
+                        }
+                    } else {
+                        previous_path = Some(file_path.clone());
+                    }
 
                     orchestration_piece_files.push(OrchestrationPieceFile {
                         read_length: file.read_length,
                         read_start_position: file.read_start_position,
-                        file_path: file.file_path,
+                        file_path,
                         file_length: file.file_length,
                         bytes: None,
                         source: None,
@@ -214,10 +241,21 @@ impl Orchestrator {
                     });
                 }
 
-  
+                // More interning code
+                let mut hash = Arc::new(piece.hash);
+                if let Some(previous_hash_unpacked) = &previous_hash {
+                    if !hash.as_ref().cmp(previous_hash_unpacked.as_ref()).is_eq() {
+                        previous_hash = Some(hash.clone());
+                    } else {
+                        hash = previous_hash_unpacked.clone();
+                    }
+                } else {
+                    previous_hash = Some(hash.clone());
+                }
+
                 let matchable = OrchestrationPiece {
                     files: orchestration_piece_files,
-                    hash: piece.hash
+                    hash: hash
                 };
                 
                 results.push(matchable);
@@ -251,9 +289,9 @@ impl Orchestrator {
             let mut partitioned: HashMap<PathBuf, Vec<OrchestrationPiece>> = HashMap::new();
 
             for entry in value {
-                partitioned.entry(entry.files.first().unwrap().export.clone()).or_default();
+                partitioned.entry(entry.files.first().unwrap().export.as_ref().clone()).or_default();
     
-                let items = partitioned.get_mut(&entry.files.first().unwrap().export).unwrap();
+                let items = partitioned.get_mut(entry.files.first().unwrap().export.as_ref()).unwrap();
                 items.push(entry);
             }
     

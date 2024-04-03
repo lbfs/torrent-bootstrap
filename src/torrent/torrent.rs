@@ -41,6 +41,8 @@ impl Torrent {
             Err(err) => return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message))),
         };
 
+        println!("Parsed token");
+
         if let BencodeToken::Dictionary(root) = token {
             return Torrent::evaluate_root(&root);
         }
@@ -60,7 +62,9 @@ impl Torrent {
             .map_err(|err| Torrent::convert_error(err))?;
 
         // Get Info Hash
+        println!("here 1");
         let info_hash = calculate_info_hash(info);
+        println!("here 2");
 
         // Evaluate Info
         let info = Torrent::evaluate_info(info)?;
