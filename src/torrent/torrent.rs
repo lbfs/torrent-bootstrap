@@ -6,7 +6,7 @@ use super::{error::TorrentErrorKind, info::calculate_info_hash, TorrentError};
 
 #[derive(Debug)]
 pub struct Torrent {
-    pub announce: String,
+    pub announce: Option<String>,
     pub announce_list: Option<Vec<Vec<String>>>,
     pub info: Info,
     pub creation_date: Option<i64>,
@@ -50,11 +50,9 @@ impl Torrent {
 
     fn evaluate_root(root: &BencodeDictionary) -> Result<Torrent, TorrentError> {
         // Required
-        let announce = root.find_string_value("announce")
-            .map_err(|err| Torrent::convert_error(err))?
-            .as_utf8()
-            .map_err(|err| Torrent::convert_error(err))?
-            .to_string();
+        let announce = if let Ok(value) = root.find_string_value("announce") {
+            Some(value.as_utf8().map_err(|err| Torrent::convert_error(err))?.to_string())
+        } else { None };
         
         let info = root.find_dictionary_value("info")
             .map_err(|err| Torrent::convert_error(err))?;
