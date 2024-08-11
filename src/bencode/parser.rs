@@ -150,9 +150,8 @@ impl Parser {
         let start_position = iterator.current_position().unwrap();
         let mut state = StringState::FirstDigit;
 
-        let mut length_buffer: Vec<u8> = Vec::new();
         let mut character_buffer: Vec<u8> = Vec::new();
-        let characters_to_read: usize;
+        let mut characters_to_read: usize = 0;
 
         loop {
             if let None = iterator.current_byte() {
@@ -162,26 +161,27 @@ impl Parser {
             let byte = iterator.current_byte().unwrap();
             match byte {
                 b'0' if matches!(state, StringState::FirstDigit) => {
-                    length_buffer.push(byte);
+                    characters_to_read = 0;
                     state = StringState::Separator;
 
                     iterator.advance()?;
                 },
                 b'1'..=b'9' if matches!(state, StringState::FirstDigit) => {
-                    length_buffer.push(byte);
+                    characters_to_read = byte as usize - b'0' as usize;
                     state = StringState::Digit;
                     iterator.advance()?;
                 },
                 b'0'..=b'9' if matches!(state, StringState::Digit) => {
-                    length_buffer.push(byte);
-                    iterator.advance()?;
-                },
-                b':' if matches!(state, StringState::Digit) || matches!(state, StringState::Separator) => {
-                    characters_to_read = std::str::from_utf8(&length_buffer)
-                        .expect("Detected non UTF-8 string during string decode. This should never happen.")
-                        .parse::<usize>()
-                        .map_err(|err| BencodeError::new(BencodeErrorKind::MalformedData, err.to_string()))?;
+                    let multiply_number: usize = characters_to_read.checked_mul(10)
+                        .ok_or_else(|| BencodeError::new(BencodeErrorKind::MalformedData, "Could not parse number to usize during bencode decode as checked_mul exceeds usize maximum.".to_string()))?;
+                    
+                    let add_number: usize = multiply_number.checked_add(byte as usize - b'0' as usize)
+                        .ok_or_else(|| BencodeError::new(BencodeErrorKind::MalformedData, "Could not parse number to usize during bencode decode as checked_add exceeds usize maximum.".to_string()))?;
 
+                    characters_to_read = add_number;
+                    iterator.advance()?;
+                }
+                b':' if matches!(state, StringState::Digit) || matches!(state, StringState::Separator) => {
                     iterator.advance()?;
                     break;
                 },
