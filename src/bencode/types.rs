@@ -1,51 +1,44 @@
 
 
-use std::{num::ParseIntError, str::{from_utf8, FromStr}};
+use std::str::from_utf8;
 use super::{error::BencodeErrorKind, BencodeError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BencodeString {
     pub value: Vec<u8>,
-    pub start_position: usize,
-    pub continuation_position: Option<usize>
+    pub(super) start_position: usize,
+    pub(super) continuation_position: usize
 }
 
 impl BencodeString {
     pub fn as_utf8<'a>(&'a self) -> Result<&'a str, BencodeError> {
-        from_utf8(&self.value)
-            .map_err(|err| BencodeError::new(BencodeErrorKind::MalformedData, err.to_string()))
+        let value = from_utf8(&self.value)
+            .map_err(|err| BencodeError::new(BencodeErrorKind::MalformedData, err.to_string()));
+
+        value
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct BencodeInteger {
-    pub value: Vec<u8>,
-    pub start_position: usize,
-    pub continuation_position: Option<usize>
-}
-
-impl BencodeInteger {
-    pub fn evaluate<T>(&self) -> Result<T, BencodeError>
-    where T: FromStr<Err = ParseIntError> {
-        from_utf8(&self.value)
-            .expect("Detected non UTF-8 string during string decode. This should never happen.")
-            .parse::<T>()
-            .map_err(|err| BencodeError::new(BencodeErrorKind::MalformedData, err.to_string()))
-    }
+    pub value: i64,
+    pub(super) start_position: usize,
+    pub(super) continuation_position: usize
 }
 
 #[derive(Debug, Clone)]
 pub struct BencodeList {
     pub value: Vec<BencodeToken>,
-    pub start_position: usize,
-    pub continuation_position: Option<usize>
+    pub(super) start_position: usize,
+    pub(super) continuation_position: usize
 }
 
 #[derive(Debug, Clone)]
 pub struct BencodeDictionary {
-    pub value: Vec<(BencodeString, BencodeToken)>,
-    pub start_position: usize,
-    pub continuation_position: Option<usize>
+    pub keys: Vec<BencodeString>,
+    pub values: Vec<BencodeToken>,
+    pub(super) start_position: usize,
+    pub(super) continuation_position: usize
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +99,7 @@ impl BencodeDictionary {
     }
 
     fn find_value<'a>(target_key: &str, dictionary: &'a BencodeDictionary) -> Option<&'a BencodeToken> {
-        for (token_key, token_value) in &dictionary.value {
+        for (token_key, token_value) in dictionary.keys.iter().zip(&dictionary.values) {
             if target_key.as_bytes().cmp(&token_key.value).is_eq() {
                 return Some(token_value);
             }

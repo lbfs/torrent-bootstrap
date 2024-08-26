@@ -12,14 +12,14 @@ fn hash_string(item: &BencodeString, hasher: &mut Sha1) {
 
 fn hash_integer(item: &BencodeInteger, hasher: &mut Sha1) {
     hasher.write_all(&[b'i']).unwrap();
-    hasher.write_all(&item.value).unwrap();
+    hasher.write_all(&item.value.to_string().as_bytes()).unwrap();
     hasher.write_all(&[b'e']).unwrap();
 }
 
 fn hash_dictionary(item: &BencodeDictionary, hasher: &mut Sha1) {
     hasher.write_all(&[b'd']).unwrap();
 
-    for (key, value) in &item.value {
+    for (key, value) in item.keys.iter().zip(&item.values) {
         hash_string(key, hasher);
         hash_token(value, hasher);
     }

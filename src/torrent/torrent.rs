@@ -69,7 +69,7 @@ impl Torrent {
         } else { None };
 
         let creation_date = if let Ok(value) = root.find_integer_value("creation date") {
-            Some(value.evaluate().map_err(|err| Torrent::convert_error(err))?)
+            Some(value.value)
         } else { None };
 
         let comment = if let Ok(value) = root.find_string_value("comment") {
@@ -105,10 +105,11 @@ impl Torrent {
             .map(|slice| slice.to_vec())
             .collect();
 
-        let piece_length = info.find_integer_value("piece length")
-            .map_err(|err| Torrent::convert_error(err))?
-            .evaluate()
-            .map_err(|err| Torrent::convert_error(err))?;
+        let piece_length = u64::try_from({
+                info.find_integer_value("piece length")
+                    .map_err(|err| Torrent::convert_error(err))?
+                    .value
+        }).map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, format!("Could not convert parsed integer value to unsigned integer value.")))?;
 
         // One or the other is required, but not both or neither.
         let length = info.find_integer_value("length");
@@ -123,7 +124,9 @@ impl Torrent {
         }
 
         let length = if let Ok(length) = length {
-            let length = length.evaluate().map_err(|err| Torrent::convert_error(err))?;
+            let length = u64::try_from(length.value)
+                .map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, format!("Could not convert parsed integer value to unsigned integer value.")))?;
+            
             Some(length)
         } else { None };
 
@@ -139,7 +142,7 @@ impl Torrent {
 
         // Optional
         let private = if let Ok(value) = info.find_integer_value("private") {
-            Some(value.evaluate().map_err(|err| Torrent::convert_error(err))?)
+            Some(value.value)
         } else { None };
 
         // Validate Piece Details
@@ -214,10 +217,11 @@ impl Torrent {
     }
 
     fn evaluate_file(file: &BencodeDictionary) -> Result<File, TorrentError> {
-        let length = file.find_integer_value("length")
-            .map_err(|err| Torrent::convert_error(err))?
-            .evaluate::<u64>()
-            .map_err(|err| Torrent::convert_error(err))?;
+        let length = u64::try_from({
+            file.find_integer_value("length")
+                .map_err(|err| Torrent::convert_error(err))?
+                .value
+        }).map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, format!("Could not convert parsed integer value to unsigned integer value.")))?;
 
         let paths = file.find_list_value("path")
             .map_err(|err| Torrent::convert_error(err))?;
