@@ -1,5 +1,3 @@
-use std::io::Read;
-
 use super::error::BencodeErrorKind;
 use super::BencodeToken;
 use super::BencodeDictionary;

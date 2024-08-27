@@ -1,5 +1,3 @@
-
-
 use std::str::from_utf8;
 use super::{error::BencodeErrorKind, BencodeError};
 
@@ -22,23 +20,23 @@ impl BencodeString {
 #[derive(Debug, Clone)]
 pub struct BencodeInteger {
     pub value: i64,
-    pub(super) start_position: usize,
-    pub(super) continuation_position: usize
+    pub start_position: usize,
+    pub continuation_position: usize
 }
 
 #[derive(Debug, Clone)]
 pub struct BencodeList {
     pub value: Vec<BencodeToken>,
-    pub(super) start_position: usize,
-    pub(super) continuation_position: usize
+    pub start_position: usize,
+    pub continuation_position: usize
 }
 
 #[derive(Debug, Clone)]
 pub struct BencodeDictionary {
     pub keys: Vec<BencodeString>,
     pub values: Vec<BencodeToken>,
-    pub(super) start_position: usize,
-    pub(super) continuation_position: usize
+    pub start_position: usize,
+    pub continuation_position: usize
 }
 
 #[derive(Debug, Clone)]

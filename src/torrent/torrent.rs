@@ -1,8 +1,7 @@
-use std::io::Read;
 use std::path::PathBuf;
 
 use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeToken, Parser};
-use super::{error::TorrentErrorKind, info::calculate_info_hash, TorrentError};
+use super::{calculate_info_hash, error::TorrentErrorKind, TorrentError};
 
 #[derive(Debug)]
 pub struct Torrent {
@@ -42,13 +41,13 @@ impl Torrent {
         };
 
         if let BencodeToken::Dictionary(root) = token {
-            return Torrent::evaluate_root(&root);
+            return Torrent::evaluate_root(&root, bytes);
         }
 
         Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Unexpected token at root. Expected dictionary token")))
     }
 
-    fn evaluate_root(root: &BencodeDictionary) -> Result<Torrent, TorrentError> {
+    fn evaluate_root(root: &BencodeDictionary, bytes: &[u8]) -> Result<Torrent, TorrentError> {
         // Required
         let announce = if let Ok(value) = root.find_string_value("announce") {
             Some(value.as_utf8().map_err(|err| Torrent::convert_error(err))?.to_string())
@@ -58,7 +57,7 @@ impl Torrent {
             .map_err(|err| Torrent::convert_error(err))?;
 
         // Get Info Hash
-        let info_hash = calculate_info_hash(info);
+        let info_hash = calculate_info_hash(info, bytes);
 
         // Evaluate Info
         let info = Torrent::evaluate_info(info)?;
