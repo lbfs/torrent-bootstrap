@@ -35,8 +35,8 @@ pub struct Info {
 
 // Converter
 impl Torrent {
-    pub fn from_reader<T: Read>(reader: T) -> Result<Torrent, TorrentError> {
-        let token = match Parser::from_reader(reader) {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Torrent, TorrentError> {
+        let token = match Parser::decode(bytes) {
             Ok(token) => token,
             Err(err) => return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message))),
         };

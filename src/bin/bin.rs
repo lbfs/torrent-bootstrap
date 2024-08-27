@@ -1,4 +1,4 @@
-use std::{fs::File, path::Path, time::Instant};
+use std::{fs::File, io::Read, path::Path, time::Instant};
 
 use clap::Parser;
 use torrent_bootstrap::{Orchestrator, OrchestratorOptions, Torrent};
@@ -37,7 +37,9 @@ fn run() -> std::io::Result<()> {
         }
 
         let mut handle = File::open(torrent_as_path)?;
-        let torrent = Torrent::from_reader(&mut handle)
+        let mut bytes: Vec<u8> = Vec::new(); 
+        handle.read_to_end(&mut bytes)?;
+        let torrent = Torrent::from_bytes(&bytes)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.message))?;
 
         torrents.push(torrent);

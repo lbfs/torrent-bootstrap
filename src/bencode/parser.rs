@@ -64,22 +64,6 @@ fn format_remaining_bytes_error(position: usize) -> BencodeError {
 
 pub struct Parser;
 impl Parser {
-    pub fn from_reader<T: Read>(reader: T) -> Result<BencodeToken, BencodeError> {
-        let bytes: Result<Vec<_>, _> = reader.bytes().into_iter().collect();
-        let bytes = bytes.map_err(|_| BencodeError::new(BencodeErrorKind::MalformedData, "Parse failure".to_string()))?;
-    
-        Parser::decode(&bytes)
-    }
-
-    fn get_continuation_position(token: &BencodeToken) -> usize {
-        match token {
-            BencodeToken::String(value) => value.continuation_position,
-            BencodeToken::List(value) => value.continuation_position,
-            BencodeToken::Integer(value) => value.continuation_position,
-            BencodeToken::Dictionary(value) => value.continuation_position,
-        }
-    }
-
     pub fn decode(bytes: &[u8]) -> Result<BencodeToken, BencodeError> {
         let token = Parser::decode_any(&bytes, 0)?;
 
@@ -414,5 +398,14 @@ impl Parser {
             start_position,
             continuation_position: position
         })
+    }
+
+    fn get_continuation_position(token: &BencodeToken) -> usize {
+        match token {
+            BencodeToken::String(value) => value.continuation_position,
+            BencodeToken::List(value) => value.continuation_position,
+            BencodeToken::Integer(value) => value.continuation_position,
+            BencodeToken::Dictionary(value) => value.continuation_position,
+        }
     }
 }
