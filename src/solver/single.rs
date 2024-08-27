@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{fs::File, sync::Arc};
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, sort_by_target_absolute_path, LengthFileFinder}, orchestrator::OrchestrationPiece, writer::PieceWriter};
+use crate::{finder::{read_bytes, read_bytes_with_handle, sort_by_target_absolute_path, LengthFileFinder}, orchestrator::OrchestrationPiece, writer::PieceWriter};
 
 use super::Solver;
 
@@ -37,19 +37,20 @@ impl Solver<Vec<OrchestrationPiece>, std::io::Error> for SinglePieceSolver {
         for search_path in search_paths {
             let pieces_length = work.len();
 
+            let mut handle = File::open(&search_path)?;
             let mut index = 0;
+
             while index < pieces_length {
                 let mut entry = work.remove(0);
                 let entry_first_file = entry.files.first_mut().unwrap();
 
-                let bytes = read_bytes(search_path, entry_first_file.read_length, entry_first_file.read_start_position)?;
+                let bytes = read_bytes_with_handle(&mut handle, entry_first_file.read_length, entry_first_file.read_start_position)?;
                 let hash = Sha1::digest(&bytes);
 
                 if entry.hash.as_slice().cmp(&hash).is_eq() {
                     entry_first_file.bytes = Some(bytes.to_vec());
                     entry_first_file.source = Some(search_path.clone());
 
-     
                     self.writer.write(Some(entry))?;
                 } else {
                     work.push(entry);

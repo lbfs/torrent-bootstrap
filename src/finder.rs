@@ -46,8 +46,16 @@ pub(crate) fn read_bytes(
     read_length: u64,
     read_start_position: u64,
 ) -> Result<Vec<u8>, std::io::Error> {
-    let mut read_bytes = vec![0u8; read_length as usize];
     let mut handle = File::open(path)?;
+    read_bytes_with_handle(&mut handle, read_length, read_start_position)
+}
+
+pub(crate) fn read_bytes_with_handle(
+    handle: &mut File,
+    read_length: u64,
+    read_start_position: u64
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut read_bytes = vec![0u8; read_length as usize];
 
     handle.seek(SeekFrom::Start(read_start_position))?;
     handle.read_exact(&mut read_bytes)?;
