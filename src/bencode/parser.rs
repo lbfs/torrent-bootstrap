@@ -274,7 +274,7 @@ impl Parser {
                             state = StringState::DigitOrSeperator;
                             position += 1;
                         },
-                        _ => { return Err(format_unexpected_character(byte, position, "b'1'..=b'9'")); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'1'..=b'9', b'0'")); }
                     }
                 }
             }
