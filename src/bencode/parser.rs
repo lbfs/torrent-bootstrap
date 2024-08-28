@@ -207,8 +207,8 @@ impl Parser {
     fn decode_string(bytes: &[u8], start_position: usize) -> Result<BencodeString, BencodeError> {
         let mut position = start_position;
 
+        let characters: Vec<u8>;
         let mut characters_to_read: usize = 0;
-        let mut characters: Vec<u8> = Vec::new();
         let mut state: StringState = StringState::FirstDigit;
 
         loop {
@@ -223,14 +223,18 @@ impl Parser {
 
             match state {
                 StringState::Character => {
-                    if characters.len() < characters_to_read {
-                        characters.push(byte);
-                        position += 1;
-                    }
-
-                    if characters.len() == characters_to_read {
+                    if characters_to_read == 0 {
+                        characters = Vec::new();
                         break;
                     }
+
+                    if position + characters_to_read >= bytes.len() {
+                        return Err(format_unexpected_eof(bytes.len()));
+                    }
+
+                    characters = Vec::from(&bytes[position..position + characters_to_read]);
+                    position += characters_to_read;
+                    break;
                 } 
                 StringState::DigitOrSeperator => {
                     match byte {
