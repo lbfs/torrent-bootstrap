@@ -9,6 +9,7 @@ use super::BencodeInteger;
 #[derive(Debug)]
 enum StringState {
     FirstDigit,
+    Seperator,
     DigitOrSeperator,
     Character
 }
@@ -53,7 +54,7 @@ fn format_unexpected_eof(position: usize) -> BencodeError {
 }
 
 fn format_unexpected_character(byte: u8, position: usize, expected: &'static str) -> BencodeError {
-    BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character {:#04x} at position {}, expected one of ({})", byte, position, expected))
+    BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character {:#04x} at position {}, expected one of {}", byte, position, expected))
 }
 
 fn format_remaining_bytes_error(position: usize) -> BencodeError {
@@ -242,20 +243,33 @@ impl Parser {
                             position += 1;
                         }
                         b':' => {
-                            characters = Vec::with_capacity(characters_to_read);
                             state = StringState::Character;
                             position += 1;
                         }
                         _ => { return Err(format_unexpected_character(byte, position, "b'0'..=b'9', b':'")); }
                     }
                 },
+                StringState::Seperator => {
+                    match byte {
+                        b':' => {
+                            state = StringState::Character;
+                            position += 1;
+                        }
+                        _ => { return Err(format_unexpected_character(byte, position, "b':'")); }
+                    }
+                }
                 StringState::FirstDigit => {
                     match byte {
+                        b'0' => {
+                            characters_to_read = 0;
+                            state = StringState::Seperator;
+                            position += 1;
+                        }
                         b'1'..=b'9' => {
                             characters_to_read = byte as usize - b'0' as usize;
                             state = StringState::DigitOrSeperator;
                             position += 1;
-                        }
+                        },
                         _ => { return Err(format_unexpected_character(byte, position, "b'1'..=b'9'")); }
                     }
                 }
