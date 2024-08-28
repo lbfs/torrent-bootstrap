@@ -52,8 +52,8 @@ fn format_unexpected_eof(position: usize) -> BencodeError {
     BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected end of file at position {}", position))
 }
 
-fn format_unexpected_character(position: usize) -> BencodeError {
-    BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character at position {}", position))
+fn format_unexpected_character(byte: u8, position: usize, expected: &'static str) -> BencodeError {
+    BencodeError::new(BencodeErrorKind::MalformedData, format!("Unexpected character {:#04x} at position {}, expected one of ({})", byte, position, expected))
 }
 
 fn format_remaining_bytes_error(position: usize) -> BencodeError {
@@ -91,7 +91,7 @@ impl Parser {
             b'i' => BencodeToken::Integer(Parser::decode_integer(bytes, start_position)?),
             b'l' => BencodeToken::List(Parser::decode_list(bytes, start_position)?),
             b'd' => BencodeToken::Dictionary(Parser::decode_dictionary(bytes, start_position)?),
-            _ => { return Err(format_unexpected_character(start_position)) }
+            _ => { return Err(format_unexpected_character(byte, start_position, "b'0'..=b'9', b'i', b'l', b'd'")) }
         };
 
         Ok(token)
@@ -127,7 +127,7 @@ impl Parser {
                             position += 1;
                             break;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'0'..=b'9', b'e'")); }
                     }
                 },
                 IntegerState::NegativeDigit => {
@@ -143,7 +143,7 @@ impl Parser {
                             position += 1;
                             break;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'0'..=b'9', b'e'")); }
                     }
                 },
                 IntegerState::NonZeroDigit => {
@@ -153,7 +153,7 @@ impl Parser {
                             state = IntegerState::NegativeDigit; 
                             position += 1;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'1'..=b'9'")); }
                     }
                 },
                 IntegerState::StopCharacter => {
@@ -162,7 +162,7 @@ impl Parser {
                             position += 1;
                             break;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'e'")); }
                     }
                 },
                 IntegerState::FirstDigit => {
@@ -181,7 +181,7 @@ impl Parser {
                             state = IntegerState::NonZeroDigit; 
                             position += 1;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'1'..=b'9', b'0', b'-'")); }
                     }
                 },
                 IntegerState::StartCharacter => {
@@ -190,7 +190,7 @@ impl Parser {
                             state = IntegerState::FirstDigit;
                             position += 1;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'i'")); }
                     }
                 }
             }
@@ -246,7 +246,7 @@ impl Parser {
                             state = StringState::Character;
                             position += 1;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'0'..=b'9', b':'")); }
                     }
                 },
                 StringState::FirstDigit => {
@@ -256,9 +256,7 @@ impl Parser {
                             state = StringState::DigitOrSeperator;
                             position += 1;
                         }
-                        _ => { 
-                            return Err(format_unexpected_character(position)); 
-                        }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'1'..=b'9'")); }
                     }
                 }
             }
@@ -298,7 +296,7 @@ impl Parser {
                             position += 1;
                             break;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'0'..=b'9', b'i', 'b'l', b'd', b'e'")); }
                     }
                 },
                 ListState::Start => {
@@ -307,7 +305,7 @@ impl Parser {
                             state = ListState::Entry;
                             position += 1;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'l'")); }
                     }
                 }
             }
@@ -364,7 +362,7 @@ impl Parser {
                             position += 1;
                             break;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'0'..=b'9', b'e'")); }
                     }
                 },
                 DictionaryState::ValueEntry => {
@@ -375,7 +373,7 @@ impl Parser {
                             values.push(token);
                             state = DictionaryState::KeyEntry;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'0'..=b'9', b'i', 'b'l', b'd'")); }
                     }
                 },
                 DictionaryState::Start => {
@@ -384,7 +382,7 @@ impl Parser {
                             state = DictionaryState::KeyEntry;
                             position += 1;
                         }
-                        _ => { return Err(format_unexpected_character(position)); }
+                        _ => { return Err(format_unexpected_character(byte, position, "b'd'")); }
                     }
                 },
             }
