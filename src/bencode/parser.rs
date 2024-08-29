@@ -228,7 +228,7 @@ impl Parser {
                         break;
                     }
 
-                    if position + characters_to_read >= bytes.len() {
+                    if position + characters_to_read > bytes.len() {
                         return Err(format_unexpected_eof(bytes.len()));
                     }
 
