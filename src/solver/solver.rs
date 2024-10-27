@@ -5,6 +5,7 @@ use super::{multiple, single};
 pub trait Solver<T, K>
 {
     fn solve(item: T, context: &K);
+    fn sort(items: &mut Vec<T>);
 }
 
 pub struct PieceSolverContext {
@@ -54,5 +55,11 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
         if let Err(err) = res {
             eprintln!("Unable to solve piece due to following error: {:#?}", err);
         }
+    }
+    
+    fn sort(items: &mut Vec<OrchestrationPiece>) {
+        items.sort_by(|left, right| {
+            left.files.len().cmp(&right.files.len())
+        });
     }
 }

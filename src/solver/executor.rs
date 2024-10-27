@@ -26,7 +26,7 @@ where
         entries.push(Vec::new())
     }
 
-    balance(&mut (entries.iter_mut().collect::<Vec<_>>()));
+    balance::<T, K, V>(&mut (entries.iter_mut().collect::<Vec<_>>()));
 
     // Setup state and start
     let locks: Vec<_> = entries
@@ -120,7 +120,7 @@ where
                 }
 
                 // Balance the work across all the active threads
-                balance(&mut thread_guards[0..state.active_threads]);
+                balance::<T, K, V>(&mut thread_guards[0..state.active_threads]);
 
                 // Remove any threads off the tail from processing if they have no work.
                 let mut deactivated_threads = 0;
@@ -142,7 +142,8 @@ where
 }
 
 // This shit is bad.
-fn balance<T>(entries: &mut [impl DerefMut<Target=Vec<T>>])
+fn balance<T, K, V>(entries: &mut [impl DerefMut<Target=Vec<T>>])
+where V: Solver<T, K> 
 {
     let capacity = entries
         .iter()
@@ -155,7 +156,7 @@ fn balance<T>(entries: &mut [impl DerefMut<Target=Vec<T>>])
        collector.extend(entry.drain(..));
     }
 
-    // TODO: Sort in asked order
+    V::sort(&mut collector);
 
     let mut index = 0;
     while collector.len() > 0 {
