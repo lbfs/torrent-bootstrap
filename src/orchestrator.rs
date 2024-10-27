@@ -1,6 +1,6 @@
-use std::{collections::HashMap, fs::File, path::{Path, PathBuf}, sync::Arc, time::Instant};
+use std::{fs::File, path::{Path, PathBuf}, sync::Arc, time::Instant};
 
-use crate::{finder::LengthFileFinder, get_sha1_hexdigest, solver::{MultiplePieceSolver, SinglePieceSolver, Solver}, torrent::{PieceFile, Pieces, Torrent}, writer::PieceWriter};
+use crate::{finder::LengthFileFinder, get_sha1_hexdigest, solver::{start, PieceSolver, PieceSolverContext}, torrent::{PieceFile, Pieces, Torrent}, writer::PieceWriter};
 
 pub struct OrchestratorOptions {
     pub torrents: Vec<Torrent>,
@@ -9,7 +9,8 @@ pub struct OrchestratorOptions {
     pub threads: usize,
 }
 
-pub(crate) struct OrchestrationPieceFile {
+#[derive(Debug)]
+pub struct OrchestrationPieceFile {
     // Filled out when generating pieces
     pub read_length: u64,
     pub read_start_position: u64,
@@ -22,7 +23,8 @@ pub(crate) struct OrchestrationPieceFile {
     pub export: Arc<PathBuf>
 }
 
-pub(crate) struct OrchestrationPiece {
+#[derive(Debug)]
+pub struct OrchestrationPiece {
     pub files: Vec<OrchestrationPieceFile>,
     pub hash: Arc<Vec<u8>>
 }
@@ -64,7 +66,7 @@ impl Orchestrator {
         drop(hashes);
 
         // Setup the finder
-        let finder = Arc::new(Orchestrator::setup_finder(&options.torrents, &options));
+        let finder = Orchestrator::setup_finder(&options.torrents, &options);
 
         println!(
             "File finder finished caching and finished at {} seconds.",
@@ -99,51 +101,18 @@ impl Orchestrator {
             .sum();
 
         let writer = PieceWriter::new(piece_count);
-        let writer = Arc::new(writer);
 
-        // Immeditately reject any piece without matches
-        let mut accepted = Vec::new();
-
-        for entry in work {
-            let mut is_rejected = false;
-
-            for file in entry.files.iter() {
-                if finder.find_length(file.file_length).len() == 0 {
-                    is_rejected = true;
-                    break;
-                }
-            }
-
-            if is_rejected {
-                writer.write(None)?;
-            } else {
-                accepted.push(entry);
-            }
-        }
-
-        // Partition Pieces
-        let (singles, multiple) = Orchestrator::partition_piece_list(accepted);
-
-        // Start!
-        let single_pieces_partitioned_by_hash = Orchestrator::partition_single_pieces_by_path_and_length(singles);
-        let single_solver = SinglePieceSolver::new(writer.clone(), finder.clone());
-        single_solver.start(single_pieces_partitioned_by_hash, options.threads)?;
-
+        // Start processing the work
         println!(
-            "Single File Orchestrator finished at {} seconds.",
+            "Solver started at {} seconds.",
             now.elapsed().as_secs()
         );
 
-        let multiple_solver = MultiplePieceSolver::new(writer.clone(), finder.clone());
-        multiple_solver.start(multiple, options.threads)?;
+        let context = Arc::new(PieceSolverContext::new(finder, writer));
+        start::<_, _, PieceSolver>(work, context, options.threads);
 
         println!(
-            "Multi File Orchestrator finished at {} seconds.",
-            now.elapsed().as_secs()
-        );
-
-        println!(
-            "Total time elapsed finished at {} seconds.",
+            "Solver finished at {} seconds.",
             now.elapsed().as_secs()
         );
 
@@ -175,21 +144,6 @@ impl Orchestrator {
         }
 
         finder
-    }
-
-    fn partition_piece_list(work: Vec<OrchestrationPiece>) -> (Vec<OrchestrationPiece>, Vec<OrchestrationPiece>) {
-        let mut singles = Vec::new();
-        let mut multiple = Vec::new();
-
-        for entry in work {
-            if entry.files.len() == 1 {
-                singles.push(entry);
-            } else {
-                multiple.push(entry);
-            }
-        }
-
-        (singles, multiple)
     }
     
     fn convert_pieces_to_work(torrents: &[Torrent], export_directory: &Path) -> Vec<OrchestrationPiece> {
@@ -264,42 +218,6 @@ impl Orchestrator {
         }
 
         results
-    }
-
-    // Only use this with single pieces!
-    fn partition_single_pieces_by_length(work: Vec<OrchestrationPiece>) -> HashMap<u64, Vec<OrchestrationPiece>> {
-        let mut single_files: HashMap<u64, Vec<OrchestrationPiece>> = HashMap::new();
-
-        for entry in work {
-            let file = entry.files.first().unwrap();
-            let length = file.file_length;
-
-            single_files.entry(length).or_default();
-
-            let items = single_files.get_mut(&length).unwrap();
-            items.push(entry);
-        }
-
-        single_files
-    }
-
-    fn partition_single_pieces_by_path_and_length(work: Vec<OrchestrationPiece>) -> Vec<Vec<OrchestrationPiece>> {
-        let mut total = Vec::new();
-
-        for (_, value) in Orchestrator::partition_single_pieces_by_length(work) {
-            let mut partitioned: HashMap<PathBuf, Vec<OrchestrationPiece>> = HashMap::new();
-
-            for entry in value {
-                partitioned.entry(entry.files.first().unwrap().export.as_ref().clone()).or_default();
-    
-                let items = partitioned.get_mut(entry.files.first().unwrap().export.as_ref()).unwrap();
-                items.push(entry);
-            }
-    
-            total.extend(partitioned.into_iter().map(|(_, v)| v))
-        }
-        
-        total
     }
 
     fn format_path(file: &PieceFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {
