@@ -28,12 +28,13 @@ impl PieceWriter {
 
         if let Some(entry) = entry {
             for file in entry.files.iter() {
+                if file.is_padding_file { continue; }
                 if let Some(source) = &file.source {
-                    if !source.eq(file.export.as_ref()) {
+                    if !source.eq(&file.export) {
                         if let Some(bytes) = &file.bytes {
                             fs::create_dir_all(file.export.parent().unwrap())?;
 
-                            let mut handle = OpenOptions::new().write(true).create(true).open(file.export.as_ref())?;
+                            let mut handle = OpenOptions::new().write(true).create(true).open(&file.export)?;
                             handle.set_len(file.file_length)?;
                             handle.seek(SeekFrom::Start(file.read_start_position))?;
                             handle.write_all(&bytes)?;

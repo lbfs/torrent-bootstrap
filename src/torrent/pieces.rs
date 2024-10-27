@@ -8,6 +8,7 @@ pub struct PieceFile {
     pub read_start_position: u64,
     pub file_path: PathBuf,
     pub file_length: u64,
+    pub is_padding_file: bool
 }
 
 #[derive(Debug)]
@@ -66,7 +67,8 @@ impl Pieces {
                     read_start_position: (current.length - file_remaining_length),
                     read_length: (file_remaining_length - current_remaining),
                     file_length: current.length,
-                    file_path: current.path.clone() // TODO: Remove this clone
+                    file_path: current.path.clone().into_iter().collect(), // TODO: Remove this clone
+                    is_padding_file: current.path.len() == 2 && current.path[0] == ".pad" && current.path[1].chars().all(char::is_numeric)
                 });
 
                 file_remaining_length = current_remaining;
@@ -117,7 +119,8 @@ impl Pieces {
                     read_start_position: read_start_position,
                     read_length: read_length,
                     file_length: torrent.info.length.unwrap(),
-                    file_path: Path::new(&torrent.info.name).to_path_buf()
+                    file_path: Path::new(&torrent.info.name).to_path_buf(),
+                    is_padding_file: false
                 }],
                 hash: hash.clone(),
                 length: read_length

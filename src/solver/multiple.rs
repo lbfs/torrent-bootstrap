@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use sha1::{Digest, Sha1};
 
@@ -15,10 +15,10 @@ pub fn scan(
 fn scan_internal<'a>(
     depth: usize,
     hasher: Sha1,
-    finder: &HashMap<usize, Vec<(&'a PathBuf, Vec<u8>)>>,
+    finder: &Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>,
     entry: &mut OrchestrationPiece
 ) -> Result<bool, std::io::Error> {
-    let entries = finder.get(&depth).unwrap();
+    let entries = &finder[depth];
 
     for (path, read_buffer) in entries.into_iter() {
         let mut hasher = hasher.clone();
@@ -34,7 +34,7 @@ fn scan_internal<'a>(
         if valid {
             let depth_file = entry.files.get_mut(depth).unwrap();
             depth_file.bytes = Some(read_buffer.clone());
-            depth_file.source = Some(path.to_path_buf());
+            depth_file.source = if let Some(path) = path { Some(path.to_path_buf()) } else { None };
             return Ok(valid);
         }
     }
@@ -42,28 +42,33 @@ fn scan_internal<'a>(
     Ok(false)
 }
 
-fn preload<'a>(entry: &OrchestrationPiece, finder: &'a LengthFileFinder) -> Result<HashMap<usize, Vec<(&'a PathBuf, Vec<u8>)>>, std::io::Error> {
-    let mut loaded = HashMap::new();
+fn preload<'a>(entry: &OrchestrationPiece, finder: &'a LengthFileFinder) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
+    let mut loaded = Vec::with_capacity(entry.files.len());
 
-    for (file_position, file) in entry.files.iter().enumerate() {
-        let mut results: Vec<(&'a PathBuf, Vec<u8>)> = Vec::new();
-        let search_paths = finder.find_length(file.file_length);
-        let search_paths = sort_by_target_absolute_path(&file.file_path, &file.export, search_paths);
+    for file in entry.files.iter() {
+        let mut results: Vec<(Option<&'a PathBuf>, Vec<u8>)> = Vec::new();
 
-        // De-duplicate identical files if the file has already been seen.
-        'inner: for search_path in search_paths {
-            let value = read_bytes(search_path, file.read_length, file.read_start_position)?;
-
-            for (_, result_bytes) in results.iter() {
-                if result_bytes.cmp(&value).is_eq() {
-                    continue 'inner;
+        if file.is_padding_file { 
+            results.push((None, vec![0; file.read_length as usize]));
+        } else {
+            let search_paths = finder.find_length(file.file_length);
+            let search_paths = sort_by_target_absolute_path(&file.file_path, &file.export, search_paths);
+    
+            // De-duplicate identical files if the file has already been seen.
+            'inner: for search_path in search_paths {
+               let value = read_bytes(search_path, file.read_length, file.read_start_position)?;
+    
+                for (_, result_bytes) in results.iter() {
+                    if result_bytes.cmp(&value).is_eq() {
+                        continue 'inner;
+                    }
                 }
+    
+                results.push((Some(search_path), value));
             }
-
-            results.push((search_path, value));
         }
 
-        loaded.insert(file_position, results);
+        loaded.push(results);
     }
 
     Ok(loaded)

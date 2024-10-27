@@ -29,6 +29,7 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
         let res: Result<(), std::io::Error> = (|| {
             let mut is_rejected = false;
             for file in item.files.iter() {
+                if file.is_padding_file { continue; }
                 if context.finder.find_length(file.file_length).len() == 0 {
                     is_rejected = true;
                     break;
