@@ -1,4 +1,4 @@
-use std::{ops::DerefMut, sync::{Arc, Mutex, MutexGuard}, thread::{self, JoinHandle}};
+use std::{sync::{Arc, Mutex, MutexGuard}, thread::{self, JoinHandle}};
 
 use super::Solver;
 
@@ -26,7 +26,7 @@ where
         entries.push(Vec::new())
     }
 
-    balance::<T, K, V>(&mut (entries.iter_mut().collect::<Vec<_>>()));
+    V::balance(&mut (entries.iter_mut().collect::<Vec<_>>()));
 
     // Setup state and start
     let locks: Vec<_> = entries
@@ -40,7 +40,7 @@ where
     }));
 
     // Start up the workers
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(thread_count);
     for (thread_id, local) in locks.into_iter().enumerate() {
         let execution_state = execution_state.clone();
         let context = context.clone();
@@ -120,7 +120,7 @@ where
                 }
 
                 // Balance the work across all the active threads
-                balance::<T, K, V>(&mut thread_guards[0..state.active_threads]);
+                V::balance(&mut thread_guards[0..state.active_threads]);
 
                 // Remove any threads off the tail from processing if they have no work.
                 let mut deactivated_threads = 0;
@@ -138,31 +138,5 @@ where
                 state.active_threads = state.active_threads - deactivated_threads;
             }
         }
-    }
-}
-
-// This shit is bad.
-fn balance<T, K, V>(entries: &mut [impl DerefMut<Target=Vec<T>>])
-where V: Solver<T, K> 
-{
-    let capacity = entries
-        .iter()
-        .map(|value| value.len())
-        .sum::<usize>();
-
-    let mut collector = Vec::with_capacity(capacity);
-
-    for entry in entries.iter_mut() {
-       collector.extend(entry.drain(..));
-    }
-
-    V::sort(&mut collector);
-
-    let mut index = 0;
-    while collector.len() > 0 {
-        entries[index].push(collector.pop().unwrap());
-
-        index += 1;
-        if index >= entries.len() { index = 0; }
     }
 }

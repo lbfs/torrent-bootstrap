@@ -59,7 +59,7 @@ impl Orchestrator {
         }
 
         // Make sure we don't have duplicate torrents
-        let mut hashes = Vec::new();
+        let mut hashes = Vec::with_capacity(options.torrents.len());
         for torrent in options.torrents.iter() {
             if hashes.contains(torrent.info_hash.as_ref()) {
                 Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Passed torrent {} more than once. The input list to the orchestrator must be unique.", get_sha1_hexdigest(&torrent.info_hash))))?
