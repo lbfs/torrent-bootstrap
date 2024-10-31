@@ -1,9 +1,9 @@
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, ExportFileFinder}, orchestrator::OrchestrationPiece};
+use crate::{finder::{read_bytes, FileFinder}, orchestrator::OrchestrationPiece};
 
 pub fn scan(
-    finder: &ExportFileFinder,
+    finder: &FileFinder,
     entry: &mut OrchestrationPiece,
 ) -> Result<bool, std::io::Error> {
 

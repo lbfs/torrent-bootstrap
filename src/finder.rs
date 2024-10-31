@@ -3,35 +3,38 @@ use std::{
 };
 use walkdir::WalkDir;
 
+use crate::{get_sha1_hexdigest, PieceFile, Torrent};
+use crate::File as TorrentFile;
+
 pub struct LengthFileFinder {
     pub cache: HashMap<u64, Vec<PathBuf>>,
 }
 
 impl LengthFileFinder {
-    pub fn new() -> LengthFileFinder {
-        LengthFileFinder {
-            cache: HashMap::new(),
-        }
-    }
+    pub fn new(lengths: &BTreeSet<u64>, scan_directories: &[PathBuf]) -> LengthFileFinder {
+        let mut cache = HashMap::new();
 
-    pub fn add(&mut self, lengths: &BTreeSet<u64>, scan_directory: &Path) {
-
-        for result in WalkDir::new(scan_directory) {
-            if let Ok(result) = result {
-                if result.file_type().is_file() && lengths.contains(&(result.metadata().unwrap().len())) {
-                    let length = result.metadata().unwrap().len();
-                    self.cache.entry(length).or_default();
-                
-                    let items = self.cache.get_mut(&length).unwrap();
-                    let path = result.into_path();
-        
-                    if !items.contains(&path) {
-                        items.push(path);
+        for scan_directory in scan_directories {
+            for result in WalkDir::new(scan_directory) {
+                if let Ok(result) = result {
+                    if result.file_type().is_file() && lengths.contains(&(result.metadata().unwrap().len())) {
+                        let length = result.metadata().unwrap().len();
+                        cache.entry(length).or_default();
+                    
+                        let items: &mut Vec<PathBuf> = cache.get_mut(&length).unwrap();
+                        let path = result.into_path();
+            
+                        if !items.contains(&path) {
+                            items.push(path);
+                        }
                     }
                 }
             }
         }
-        
+
+        LengthFileFinder {
+            cache
+        }
     }
 
     pub fn find_length(&self, length: u64) -> &[PathBuf] {
@@ -43,20 +46,70 @@ impl LengthFileFinder {
     }
 }
 
-pub struct ExportFileFinder {
-    pub cache: Vec<Box<[PathBuf]>>,
+pub struct FileFinder {
+    search: Vec<Vec<PathBuf>>,
+    path_to_index: HashMap<PathBuf, usize>
 }
 
-impl ExportFileFinder {
-    pub fn new(cache: Vec<Box<[PathBuf]>>) -> ExportFileFinder {
-        ExportFileFinder {
-            cache: cache
+impl FileFinder {
+    pub fn new(torrents: &[Torrent], export_directory: &Path, length_finder: LengthFileFinder) -> FileFinder {
+        let mut export_lengths: Vec<Vec<PathBuf>> = Vec::new();
+        let mut export_paths: Vec<PathBuf> = Vec::new();
+
+        for torrent in torrents {
+            if torrent.info.files.is_some() {
+                for file in torrent.info.files.as_ref().unwrap() {
+
+                    let entries = length_finder.find_length(file.length);
+                    let partial_target = file.path.iter().collect::<PathBuf>();
+                    let full_target = format_path_multiple(file, torrent, export_directory);
+
+                    sort_by_target_absolute_path(&partial_target, &full_target, entries);
+
+                    let lengths = entries
+                        .into_iter()
+                        .map(|value| value.to_path_buf())
+                        .collect(); 
+
+
+                    export_paths.push(full_target);
+                    export_lengths.push(lengths);
+                }
+            } else if torrent.info.length.is_some() {
+                let entries = length_finder.find_length(torrent.info.length.unwrap());
+                let full_target = format_path_single(torrent, export_directory);
+                let partial_target = Path::new(&torrent.info.name);
+
+                sort_by_target_absolute_path(partial_target, &full_target, entries);
+
+                let lengths = length_finder.find_length(torrent.info.length.unwrap())
+                    .into_iter()
+                    .map(|value| value.to_path_buf())
+                    .collect(); 
+
+                export_paths.push(full_target);
+                export_lengths.push(lengths);
+            }
         }
+
+        let mut path_to_export_lengths = HashMap::with_capacity(export_paths.len());
+        for (index, export_path) in export_paths.into_iter().enumerate() {
+            path_to_export_lengths.insert(export_path, index);
+        }
+
+        FileFinder {
+            search: export_lengths,
+            path_to_index: path_to_export_lengths
+        }
+    }
+
+    pub fn find_position(&self, path: &Path) -> Option<usize> {
+        self.path_to_index.get(path).copied()
     }
 
     pub fn find_length(&self, position: usize) -> &[PathBuf] {
         static EMPTY_RESULT: [PathBuf; 0] = [];
-        match self.cache.get(position) {
+        match self.search.get(position) {
             Some(value) => value.as_ref(),
             None => &EMPTY_RESULT
         }
@@ -111,4 +164,54 @@ pub(crate) fn sort_by_target_absolute_path<'a>(partial_target: &Path, full_targe
     });
 
     entries
+}
+
+fn format_path_multiple(file: &TorrentFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {
+    let data = Path::new("Data");
+    let info_hash_as_human = get_sha1_hexdigest(&torrent.info_hash);
+    let info_hash_path = Path::new(&info_hash_as_human);
+    let torrent_name = Path::new(&torrent.info.name);
+
+    [export_directory, info_hash_path, data, torrent_name, &file.path.iter().collect::<PathBuf>()]
+        .iter()
+        .collect()
+}
+
+fn format_path_single(torrent: &Torrent, export_directory: &Path) -> PathBuf {
+    let data = Path::new("Data");
+    let info_hash_as_human = get_sha1_hexdigest(&torrent.info_hash);
+    let info_hash_path = Path::new(&info_hash_as_human);
+    let torrent_name = Path::new(&torrent.info.name);
+
+    [export_directory, info_hash_path, data, torrent_name]
+        .iter()
+        .collect()
+}
+
+pub fn format_path(file: &PieceFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {
+    let data = Path::new("Data");
+    let info_hash_as_human = get_sha1_hexdigest(&torrent.info_hash);
+    let info_hash_path = Path::new(&info_hash_as_human);
+    let torrent_name = Path::new(&torrent.info.name);
+
+    if torrent.info.files.is_some() {
+        [
+            export_directory,
+            info_hash_path,
+            data,
+            torrent_name,
+            file.file_path.as_path(),
+        ]
+        .iter()
+        .collect()
+    } else {
+        [
+            export_directory,
+            info_hash_path,
+            data,
+            file.file_path.as_path(),
+        ]
+        .iter()
+        .collect()
+    }
 }

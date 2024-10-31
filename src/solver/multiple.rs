@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, ExportFileFinder}, orchestrator::OrchestrationPiece};
+use crate::{finder::{read_bytes, FileFinder}, orchestrator::OrchestrationPiece};
 
 pub fn scan(
-    finder: &ExportFileFinder,
+    finder: &FileFinder,
     mut entry: &mut OrchestrationPiece,
 ) -> Result<bool, std::io::Error> {
     let loaded = preload(entry, finder)?;
@@ -42,7 +42,7 @@ fn scan_internal<'a>(
     Ok(false)
 }
 
-fn preload<'a>(entry: &OrchestrationPiece, finder: &'a ExportFileFinder) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
+fn preload<'a>(entry: &OrchestrationPiece, finder: &'a FileFinder) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
     let mut loaded = Vec::with_capacity(entry.files.len());
 
     for file in entry.files.iter() {

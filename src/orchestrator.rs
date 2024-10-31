@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::BTreeSet,
     fs::File,
     path::{Path, PathBuf},
     sync::Arc,
@@ -7,10 +7,10 @@ use std::{
 };
 
 use crate::{
-    finder::{sort_by_target_absolute_path, ExportFileFinder, LengthFileFinder},
+    finder::{format_path, FileFinder, LengthFileFinder},
     get_sha1_hexdigest,
     solver::{start, PieceSolver, PieceSolverContext},
-    torrent::{PieceFile, Pieces, Torrent},
+    torrent::{Pieces, Torrent},
     writer::PieceWriter,
 };
 
@@ -26,7 +26,7 @@ pub struct OrchestrationPieceFile {
     // Filled out when generating pieces
     pub read_length: u64,
     pub read_start_position: u64,
-    pub file_path: PathBuf,
+    // pub file_path: PathBuf,
     pub file_length: u64,
     pub is_padding_file: bool,
 
@@ -91,17 +91,17 @@ impl Orchestrator {
         }
         drop(hashes);
 
-        // Setup work
-        let mut work =
-            Orchestrator::convert_pieces_to_work(&options.torrents, &options.export_directory);
-
         // Setup the finder
-        let finder = Orchestrator::setup_finder(&options.torrents, &mut work, &options);
+        let finder = Orchestrator::setup_finder(&options.torrents, &options);
 
         println!(
             "File finder finished caching and finished at {} seconds.",
             now.elapsed().as_secs()
         );
+
+        // Setup work
+        let work =
+            Orchestrator::convert_pieces_to_work(&options.torrents, &options.export_directory, &finder);
 
         // Validate entries
         // Solvers will weigh the identical paths as higher, and writer will skip any parts that have already been written
@@ -120,6 +120,8 @@ impl Orchestrator {
             }
         }
 
+
+
         // Setup Writer
         let writer = PieceWriter::new(work.len());
 
@@ -136,9 +138,8 @@ impl Orchestrator {
 
     fn setup_finder(
         torrents: &[Torrent],
-        pieces: &mut [OrchestrationPiece],
         options: &OrchestratorOptions,
-    ) -> ExportFileFinder {
+    ) -> FileFinder {
         // Unique File Lengths
         let mut file_lengths: BTreeSet<u64> = BTreeSet::new();
 
@@ -153,42 +154,14 @@ impl Orchestrator {
         }
 
         // Length File Finder
-        let mut length_file_finder = LengthFileFinder::new();
-        for scan_directory in &options.scan_directories {
-            length_file_finder.add(&file_lengths, scan_directory.as_path());
-        }
-
-        // Build sorted file finder
-        let mut file_index: usize = 0;
-
-        let mut export_file_finder: Vec<Box<[PathBuf]>> = Vec::new();
-        let mut path_to_position: HashMap<PathBuf, usize> = HashMap::new();
-        for piece in pieces {
-            for file in piece.files.iter_mut() {
-                if path_to_position.contains_key(&file.export) {
-                    file.export_index = *path_to_position.get(&file.export).unwrap();
-                    continue;
-                };
-
-                let entries = length_file_finder.find_length(file.file_length);
-                sort_by_target_absolute_path(&file.file_path, &file.export, entries);
-
-                let sorted: Box<[PathBuf]> =
-                    entries.into_iter().map(|value| value.clone()).collect();
-
-                path_to_position.insert(file.export.clone(), file_index);
-                export_file_finder.push(sorted);
-                file.export_index = file_index;
-                file_index = export_file_finder.len();
-            }
-        }
-
-        ExportFileFinder::new(export_file_finder)
+        let length_file_finder = LengthFileFinder::new(&file_lengths, &options.scan_directories);
+        FileFinder::new(torrents, &options.export_directory, length_file_finder)
     }
 
     fn convert_pieces_to_work(
         torrents: &[Torrent],
         export_directory: &Path,
+        finder: &FileFinder
     ) -> Vec<OrchestrationPiece> {
         let mut results = Vec::new();
 
@@ -199,26 +172,25 @@ impl Orchestrator {
                 let mut orchestration_piece_files: Vec<OrchestrationPieceFile> = Vec::new();
 
                 for file in piece.files {
-                    let export = Orchestrator::format_path(&file, torrent, export_directory);
-                    let file_path = file.file_path.clone();
+                    let export = format_path(&file, torrent, export_directory);
+                    let export_index = finder.find_position(&export);
 
                     orchestration_piece_files.push(OrchestrationPieceFile {
                         read_length: file.read_length,
                         read_start_position: file.read_start_position,
-                        file_path,
+                        // file_path,
                         file_length: file.file_length,
                         is_padding_file: file.is_padding_file,
                         bytes: None,
                         source: None,
-                        export,
-                        export_index: usize::MAX
+                        export: export,
+                        export_index: export_index.unwrap()
                     });
                 }
 
-                let hash = piece.hash.clone();
                 let matchable = OrchestrationPiece {
                     files: orchestration_piece_files,
-                    hash: hash,
+                    hash: piece.hash,
                 };
 
                 results.push(matchable);
@@ -226,33 +198,5 @@ impl Orchestrator {
         }
 
         results
-    }
-
-    fn format_path(file: &PieceFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {
-        let data = Path::new("Data");
-        let info_hash_as_human = get_sha1_hexdigest(&torrent.info_hash);
-        let info_hash_path = Path::new(&info_hash_as_human);
-        let torrent_name = Path::new(&torrent.info.name);
-
-        if torrent.info.files.is_some() {
-            [
-                export_directory,
-                info_hash_path,
-                data,
-                torrent_name,
-                file.file_path.as_path(),
-            ]
-            .iter()
-            .collect()
-        } else {
-            [
-                export_directory,
-                info_hash_path,
-                data,
-                file.file_path.as_path(),
-            ]
-            .iter()
-            .collect()
-        }
     }
 }

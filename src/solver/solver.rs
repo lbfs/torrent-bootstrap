@@ -1,6 +1,6 @@
 use std::ops::DerefMut;
 
-use crate::{finder::ExportFileFinder, orchestrator::OrchestrationPiece, writer::PieceWriter};
+use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, writer::PieceWriter};
 
 use super::{multiple, single};
 
@@ -11,12 +11,12 @@ pub trait Solver<T, K>
 }
 
 pub struct PieceSolverContext {
-    pub finder: ExportFileFinder,
+    pub finder: FileFinder,
     pub writer: PieceWriter
 }
 
 impl PieceSolverContext {
-    pub fn new(finder: ExportFileFinder, writer: PieceWriter) -> PieceSolverContext {
+    pub fn new(finder: FileFinder, writer: PieceWriter) -> PieceSolverContext {
         PieceSolverContext {
             finder,
             writer
