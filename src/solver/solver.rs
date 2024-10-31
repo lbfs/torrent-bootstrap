@@ -1,6 +1,6 @@
 use std::ops::DerefMut;
 
-use crate::{finder::LengthFileFinder, orchestrator::OrchestrationPiece, writer::PieceWriter};
+use crate::{finder::ExportFileFinder, orchestrator::OrchestrationPiece, writer::PieceWriter};
 
 use super::{multiple, single};
 
@@ -11,12 +11,12 @@ pub trait Solver<T, K>
 }
 
 pub struct PieceSolverContext {
-    pub finder: LengthFileFinder,
+    pub finder: ExportFileFinder,
     pub writer: PieceWriter
 }
 
 impl PieceSolverContext {
-    pub fn new(finder: LengthFileFinder, writer: PieceWriter) -> PieceSolverContext {
+    pub fn new(finder: ExportFileFinder, writer: PieceWriter) -> PieceSolverContext {
         PieceSolverContext {
             finder,
             writer
@@ -32,7 +32,7 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
             let mut is_rejected = false;
             for file in item.files.iter() {
                 if file.is_padding_file { continue; }
-                if context.finder.find_length(file.file_length).len() == 0 {
+                if context.finder.find_length(file.export_index).len() == 0 {
                     is_rejected = true;
                     break;
                 }
@@ -67,75 +67,49 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
             .map(|value| value.len())
             .sum::<usize>();
 
-
-        // Split items based on if they have multiple files or only one file.
-        let mut multiple = Vec::new();
-        let mut singles = Vec::new();
+        let mut pieces_to_place = Vec::with_capacity(capacity);
 
         for entry in entries.iter_mut() {
-            while entry.len() > 0 {
-                let last = entry.last().unwrap();
-                if last.files.len() == 1 {
-                    singles.push(entry.pop().unwrap());
-                } else if last.files.len() > 1 {
-                    multiple.push(entry.pop().unwrap());
-                }
-            }
+            pieces_to_place.extend(entry.drain(..));
         }
 
-        // Sort single files by export name to avoid writing to same file from multiple threads
-        singles.sort_by(|left, right| {
-            let left_name = &left.files.first().unwrap().export;
-            let right_name = &right.files.first().unwrap().export;
+        // Sort pieces from least complex to most complex by file count, and within the file count sort by file path
+        pieces_to_place.sort_by(|left, right| {
+            let left_files = &left.files;
+            let right_files = &right.files;
 
-            left_name.cmp(&right_name)
+            let same_number_of_files = left_files.len().cmp(&right_files.len());
+            if same_number_of_files.is_eq() { 
+                left_files.first().unwrap().export_index.cmp(&right_files.first().unwrap().export_index)
+            } else {
+                same_number_of_files
+            }
         });
 
-        // Sort multiple files by complexity
-        multiple.sort_by(|left, right| {
-            left.files.len().cmp(&right.files.len())
-        });
+        // Place items onto worker queue
+        while pieces_to_place.len() > 0 {
+            let last = pieces_to_place.last().unwrap();
+            let last_file_name = last.files.first().unwrap().export_index;
 
-        // Put worst time complexity pieces last (by putting them first)
-        let mut index = 0;
-        while multiple.len() > 0 {
-            entries[index].push(multiple.pop().unwrap());
+            let mut thread_id = usize::MAX;
+            let mut thread_size = usize::MAX;
     
-            index += 1;
-            index *= (index < entries.len()) as usize
-        }
-
-        // Put files with identical export files onto the same thread.
-        let mut index = 0;
-        loop {
-            if singles.len() == 0 { break; }
-            let last = singles.pop().unwrap();
-
-            while singles.len() > 0 {
-
-                let next = singles.last().unwrap();
-                let next_file_name = &next.files.first().unwrap().export;
-
-                if !next_file_name.cmp(&last.files.first().unwrap().export).is_eq() {
-                    break;
+            // Find thread id with lowest size
+            for (entry_index, entry) in entries.iter().enumerate() {
+                if entry.len() < thread_size {
+                    thread_id = entry_index;
+                    thread_size = entry.len();
                 }
-
-                entries[index].push(singles.pop().unwrap());
             }
 
-            entries[index].push(last);
+            while pieces_to_place.len() > 0 {
+                let next_file_name = &pieces_to_place.last().unwrap()
+                    .files.first().unwrap().export_index;
 
-            index += 1;
-            index *= (index < entries.len()) as usize
-        }
+                if !last_file_name.cmp(next_file_name).is_eq() { break; }
 
-        let final_capacity = entries
-            .iter()
-            .map(|value| value.len())
-            .sum::<usize>();
-
-        if final_capacity != capacity {
-            panic!("Balancing method has a problem. Input and output sizes are not the same!");
+                entries[thread_id].push(pieces_to_place.pop().unwrap());
+            }
         }
     }
 }

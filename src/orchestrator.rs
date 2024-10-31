@@ -1,8 +1,18 @@
-use std::{fs::File, path::{Path, PathBuf}, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeSet, HashMap},
+    fs::File,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
-use crate::{finder::LengthFileFinder, get_sha1_hexdigest, solver::{start, PieceSolver, PieceSolverContext}, torrent::{PieceFile, Pieces, Torrent}, writer::PieceWriter};
-
-
+use crate::{
+    finder::{sort_by_target_absolute_path, ExportFileFinder, LengthFileFinder},
+    get_sha1_hexdigest,
+    solver::{start, PieceSolver, PieceSolverContext},
+    torrent::{PieceFile, Pieces, Torrent},
+    writer::PieceWriter,
+};
 
 pub struct OrchestratorOptions {
     pub torrents: Vec<Torrent>,
@@ -10,7 +20,6 @@ pub struct OrchestratorOptions {
     pub export_directory: PathBuf,
     pub threads: usize,
 }
-
 
 #[derive(Debug)]
 pub struct OrchestrationPieceFile {
@@ -24,13 +33,14 @@ pub struct OrchestrationPieceFile {
     // Filled out by orchestration
     pub bytes: Option<Vec<u8>>,
     pub source: Option<PathBuf>,
-    pub export: PathBuf
+    pub export: PathBuf,
+    pub export_index: usize,
 }
 
 #[derive(Debug)]
 pub struct OrchestrationPiece {
     pub files: Vec<OrchestrationPieceFile>,
-    pub hash: Vec<u8>
+    pub hash: Vec<u8>,
 }
 
 pub struct Orchestrator;
@@ -41,21 +51,33 @@ impl Orchestrator {
         // Make sure paths are allowed
         for scan_directory in options.scan_directories.iter() {
             if !(scan_directory.exists() && scan_directory.is_dir()) {
-                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Scan directory does not exist or is not a directory."))?
-            } 
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Scan directory does not exist or is not a directory.",
+                ))?
+            }
 
             if !scan_directory.is_absolute() {
-                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Scan directory must be an absolute path."))?
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Scan directory must be an absolute path.",
+                ))?
             }
         }
 
         // Check export path to make sure it is valid also.
         if !(options.export_directory.exists() && options.export_directory.is_dir()) {
-            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Export directory does not exist or is not a directory."))?
-        } 
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Export directory does not exist or is not a directory.",
+            ))?
+        }
 
         if !options.export_directory.is_absolute() {
-            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Export directory must be an absolute path."))?
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Export directory must be an absolute path.",
+            ))?
         }
 
         // Make sure we don't have duplicate torrents
@@ -69,17 +91,17 @@ impl Orchestrator {
         }
         drop(hashes);
 
+        // Setup work
+        let mut work =
+            Orchestrator::convert_pieces_to_work(&options.torrents, &options.export_directory);
+
         // Setup the finder
-        let finder = Orchestrator::setup_finder(&options.torrents, &options);
+        let finder = Orchestrator::setup_finder(&options.torrents, &mut work, &options);
 
         println!(
             "File finder finished caching and finished at {} seconds.",
             now.elapsed().as_secs()
         );
-
-        // Setup work
-        // TOOD: Excessive memory usage is here.
-        let work = Orchestrator::convert_pieces_to_work(&options.torrents, &options.export_directory);
 
         // Validate entries
         // Solvers will weigh the identical paths as higher, and writer will skip any parts that have already been written
@@ -99,58 +121,75 @@ impl Orchestrator {
         }
 
         // Setup Writer
-        let piece_count = options.torrents
-            .iter()
-            .map(|torrent| torrent.info.pieces.len())
-            .sum();
-
-        let writer = PieceWriter::new(piece_count);
+        let writer = PieceWriter::new(work.len());
 
         // Start processing the work
-        println!(
-            "Solver started at {} seconds.",
-            now.elapsed().as_secs()
-        );
+        println!("Solver started at {} seconds.", now.elapsed().as_secs());
 
         let context = Arc::new(PieceSolverContext::new(finder, writer));
         start::<_, _, PieceSolver>(work, context, options.threads);
 
-        println!(
-            "Solver finished at {} seconds.",
-            now.elapsed().as_secs()
-        );
+        println!("Solver finished at {} seconds.", now.elapsed().as_secs());
 
         Ok(())
     }
 
-    fn setup_finder(torrents: &[Torrent], options: &OrchestratorOptions) -> LengthFileFinder {
-        let mut file_lengths: Vec<u64> = Vec::new();
+    fn setup_finder(
+        torrents: &[Torrent],
+        pieces: &mut [OrchestrationPiece],
+        options: &OrchestratorOptions,
+    ) -> ExportFileFinder {
+        // Unique File Lengths
+        let mut file_lengths: BTreeSet<u64> = BTreeSet::new();
 
         for torrent in torrents {
             if torrent.info.length.is_some() {
-                if !file_lengths.contains(&torrent.info.length.unwrap()) {
-                    file_lengths.push(torrent.info.length.unwrap());
-                }
+                file_lengths.insert(torrent.info.length.unwrap());
             } else if torrent.info.files.is_some() {
                 for file in torrent.info.files.as_ref().unwrap() {
-                    if !file_lengths.contains(&file.length) {
-                        file_lengths.push(file.length);
-                    }
+                    file_lengths.insert(file.length);
                 }
-            } else {
-                panic!("Neither single-file or multiple-files option is available, unable to count file lengths.");
             }
         }
 
-        let mut finder = LengthFileFinder::new();
+        // Length File Finder
+        let mut length_file_finder = LengthFileFinder::new();
         for scan_directory in &options.scan_directories {
-            finder.add(&file_lengths, scan_directory.as_path());
+            length_file_finder.add(&file_lengths, scan_directory.as_path());
         }
 
-        finder
+        // Build sorted file finder
+        let mut file_index: usize = 0;
+
+        let mut export_file_finder: Vec<Box<[PathBuf]>> = Vec::new();
+        let mut path_to_position: HashMap<PathBuf, usize> = HashMap::new();
+        for piece in pieces {
+            for file in piece.files.iter_mut() {
+                if path_to_position.contains_key(&file.export) {
+                    file.export_index = *path_to_position.get(&file.export).unwrap();
+                    continue;
+                };
+
+                let entries = length_file_finder.find_length(file.file_length);
+                sort_by_target_absolute_path(&file.file_path, &file.export, entries);
+
+                let sorted: Box<[PathBuf]> =
+                    entries.into_iter().map(|value| value.clone()).collect();
+
+                path_to_position.insert(file.export.clone(), file_index);
+                export_file_finder.push(sorted);
+                file.export_index = file_index;
+                file_index = export_file_finder.len();
+            }
+        }
+
+        ExportFileFinder::new(export_file_finder)
     }
-    
-    fn convert_pieces_to_work(torrents: &[Torrent], export_directory: &Path) -> Vec<OrchestrationPiece> {
+
+    fn convert_pieces_to_work(
+        torrents: &[Torrent],
+        export_directory: &Path,
+    ) -> Vec<OrchestrationPiece> {
         let mut results = Vec::new();
 
         for torrent in torrents {
@@ -171,16 +210,17 @@ impl Orchestrator {
                         is_padding_file: file.is_padding_file,
                         bytes: None,
                         source: None,
-                        export
+                        export,
+                        export_index: usize::MAX
                     });
                 }
 
                 let hash = piece.hash.clone();
                 let matchable = OrchestrationPiece {
                     files: orchestration_piece_files,
-                    hash: hash
+                    hash: hash,
                 };
-                
+
                 results.push(matchable);
             }
         }
@@ -195,9 +235,24 @@ impl Orchestrator {
         let torrent_name = Path::new(&torrent.info.name);
 
         if torrent.info.files.is_some() {
-            [export_directory, info_hash_path, data, torrent_name, file.file_path.as_path()].iter().collect()
+            [
+                export_directory,
+                info_hash_path,
+                data,
+                torrent_name,
+                file.file_path.as_path(),
+            ]
+            .iter()
+            .collect()
         } else {
-            [export_directory, info_hash_path, data, file.file_path.as_path()].iter().collect()
+            [
+                export_directory,
+                info_hash_path,
+                data,
+                file.file_path.as_path(),
+            ]
+            .iter()
+            .collect()
         }
     }
 }

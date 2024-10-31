@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, sort_by_target_absolute_path, LengthFileFinder}, orchestrator::OrchestrationPiece};
+use crate::{finder::{read_bytes, ExportFileFinder}, orchestrator::OrchestrationPiece};
 
 pub fn scan(
-    finder: &LengthFileFinder,
+    finder: &ExportFileFinder,
     mut entry: &mut OrchestrationPiece,
 ) -> Result<bool, std::io::Error> {
     let loaded = preload(entry, finder)?;
@@ -42,7 +42,7 @@ fn scan_internal<'a>(
     Ok(false)
 }
 
-fn preload<'a>(entry: &OrchestrationPiece, finder: &'a LengthFileFinder) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
+fn preload<'a>(entry: &OrchestrationPiece, finder: &'a ExportFileFinder) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
     let mut loaded = Vec::with_capacity(entry.files.len());
 
     for file in entry.files.iter() {
@@ -51,8 +51,7 @@ fn preload<'a>(entry: &OrchestrationPiece, finder: &'a LengthFileFinder) -> Resu
         if file.is_padding_file { 
             results.push((None, vec![0; file.read_length as usize]));
         } else {
-            let search_paths = finder.find_length(file.file_length);
-            let search_paths = sort_by_target_absolute_path(&file.file_path, &file.export, search_paths);
+            let search_paths = finder.find_length(file.export_index);
     
             // De-duplicate identical files if the file has already been seen.
             'inner: for search_path in search_paths {

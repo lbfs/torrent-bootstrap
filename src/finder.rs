@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}
+    collections::{BTreeSet, HashMap}, fs::File, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}
 };
 use walkdir::WalkDir;
 
@@ -14,7 +14,8 @@ impl LengthFileFinder {
         }
     }
 
-    pub fn add(&mut self, lengths: &[u64], scan_directory: &Path) {
+    pub fn add(&mut self, lengths: &BTreeSet<u64>, scan_directory: &Path) {
+
         for result in WalkDir::new(scan_directory) {
             if let Ok(result) = result {
                 if result.file_type().is_file() && lengths.contains(&(result.metadata().unwrap().len())) {
@@ -30,12 +31,33 @@ impl LengthFileFinder {
                 }
             }
         }
+        
     }
 
     pub fn find_length(&self, length: u64) -> &[PathBuf] {
         static EMPTY_RESULT: [PathBuf; 0] = [];
         match self.cache.get(&length) {
             Some(value) => value.as_slice(),
+            None => &EMPTY_RESULT
+        }
+    }
+}
+
+pub struct ExportFileFinder {
+    pub cache: Vec<Box<[PathBuf]>>,
+}
+
+impl ExportFileFinder {
+    pub fn new(cache: Vec<Box<[PathBuf]>>) -> ExportFileFinder {
+        ExportFileFinder {
+            cache: cache
+        }
+    }
+
+    pub fn find_length(&self, position: usize) -> &[PathBuf] {
+        static EMPTY_RESULT: [PathBuf; 0] = [];
+        match self.cache.get(position) {
+            Some(value) => value.as_ref(),
             None => &EMPTY_RESULT
         }
     }

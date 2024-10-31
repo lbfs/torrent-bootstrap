@@ -24,7 +24,6 @@ impl PieceWriter {
     }
 
     pub fn write(&self, entry: Option<OrchestrationPiece>) -> Result<(), std::io::Error> {
-
         if let Some(entry) = entry {
             for file in entry.files.iter() {
                 if file.is_padding_file { continue; }
