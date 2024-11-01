@@ -7,7 +7,7 @@ struct ExecutionState<T> {
     locks: Vec<Arc<Mutex<Vec<T>>>>
 }
 
-pub fn start<T, K, V>(items: Vec<T>, context: Arc<K>, thread_count: usize)
+pub fn run<T, K, V>(items: Vec<T>, context: Arc<K>, thread_count: usize)
 where
     T: Send + Sync + 'static,
     K: Send + Sync + 'static,
@@ -46,7 +46,7 @@ where
         let context = context.clone();
 
         let handle = thread::spawn(move || {
-            start_internal::<T, K, V>(context, thread_id, local, execution_state);
+            run_internal::<T, K, V>(context, thread_id, local, execution_state);
         });
 
         handles.push(handle);
@@ -58,7 +58,7 @@ where
     }
 }
 
-fn start_internal<T, K, V>(
+fn run_internal<T, K, V>(
     context: Arc<K>, 
     thread_id: usize, 
     local: Arc<Mutex<Vec<T>>>, 

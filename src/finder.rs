@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap}, fs::File, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}
+    collections::{HashMap, HashSet}, fs::File, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}
 };
 use walkdir::WalkDir;
 
@@ -11,9 +11,22 @@ pub struct LengthFileFinder {
 }
 
 impl LengthFileFinder {
-    pub fn new(lengths: &BTreeSet<u64>, scan_directories: &[PathBuf]) -> LengthFileFinder {
-        let mut cache = HashMap::new();
+    pub fn new(torrents: &[Torrent], scan_directories: &[PathBuf]) -> LengthFileFinder {
+        // Unique File Lengths
+        let mut lengths: HashSet<u64> = HashSet::new();
 
+        for torrent in torrents {
+            if torrent.info.length.is_some() {
+                lengths.insert(torrent.info.length.unwrap());
+            } else if torrent.info.files.is_some() {
+                for file in torrent.info.files.as_ref().unwrap() {
+                    lengths.insert(file.length);
+                }
+            }
+        }
+
+        // Scan the disk
+        let mut cache = HashMap::new();
         for scan_directory in scan_directories {
             for result in WalkDir::new(scan_directory) {
                 if let Ok(result) = result {
@@ -46,17 +59,20 @@ impl LengthFileFinder {
     }
 }
 
+
+#[derive(Clone)]
 pub struct FileFinder {
     search: Vec<Vec<PathBuf>>,
-    sizes: Vec<u64>,
+    lengths: Vec<u64>,
+    index_to_path: Vec<PathBuf>,
     pub path_to_index: HashMap<PathBuf, usize>, // TODO: Remove public accessor
 }
 
 impl FileFinder {
     pub fn new(torrents: &[Torrent], export_directory: &Path, length_finder: LengthFileFinder) -> FileFinder {
         let mut export_search: Vec<Vec<PathBuf>> = Vec::new();
-        let mut export_paths: Vec<PathBuf> = Vec::new();
-        let mut export_sizes: Vec<u64> = Vec::new();
+        let mut index_to_path: Vec<PathBuf> = Vec::new();
+        let mut export_lengths: Vec<u64> = Vec::new();
 
         for torrent in torrents {
             if torrent.info.files.is_some() {
@@ -74,8 +90,8 @@ impl FileFinder {
                         .collect(); 
 
 
-                    export_sizes.push(file.length);
-                    export_paths.push(full_target);
+                    export_lengths.push(file.length);
+                    index_to_path.push(full_target);
                     export_search.push(searches);
                 }
             } else if torrent.info.length.is_some() {
@@ -90,33 +106,38 @@ impl FileFinder {
                     .map(|value| value.to_path_buf())
                     .collect(); 
 
-                export_sizes.push(torrent.info.length.unwrap());
-                export_paths.push(full_target);
+                export_lengths.push(torrent.info.length.unwrap());
+                index_to_path.push(full_target);
                 export_search.push(searches);
             }
         }
 
-        let mut path_to_index = HashMap::with_capacity(export_paths.len());
-        for (index, export_path) in export_paths.into_iter().enumerate() {
-            path_to_index.insert(export_path, index);
+        let mut path_to_index = HashMap::with_capacity(index_to_path.len());
+        for (index, export_path) in index_to_path.iter().enumerate() {
+            path_to_index.insert(export_path.clone(), index);
         }
 
         FileFinder {
             search: export_search,
-            sizes: export_sizes,
-            path_to_index: path_to_index
+            lengths: export_lengths,
+            path_to_index: path_to_index,
+            index_to_path: index_to_path
         }
     }
 
-    pub fn find_position(&self, path: &Path) -> Option<usize> {
-        self.path_to_index.get(path).copied()
+    pub fn find_path_from_index(&self, index: usize) -> &PathBuf {
+        self.index_to_path.get(index).unwrap()
     }
 
-    pub fn find_size(&self, index: usize) -> u64 {
-        *self.sizes.get(index).unwrap()
+    pub fn find_index_from_path(&self, path: &Path) -> usize {
+        *self.path_to_index.get(path).unwrap()
     }
 
-    pub fn find_length(&self, index: usize) -> &[PathBuf] {
+    pub fn find_length(&self, index: usize) -> u64 {
+        *self.lengths.get(index).unwrap()
+    }
+
+    pub fn find_searches(&self, index: usize) -> &[PathBuf] {
         self.search.get(index).unwrap().as_ref()
     }
 }

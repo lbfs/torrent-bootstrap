@@ -8,7 +8,7 @@ pub fn scan(
 ) -> Result<bool, std::io::Error> {
 
     let first_file = entry.files.first_mut().unwrap();
-    let search_paths = finder.find_length(first_file.export_index);
+    let search_paths = finder.find_searches(first_file.export_index);
 
     for search_path in search_paths {
         let bytes = read_bytes(search_path, first_file.read_length, first_file.read_start_position)?;

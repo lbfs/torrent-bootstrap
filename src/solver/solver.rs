@@ -1,6 +1,6 @@
-use std::ops::DerefMut;
+use std::{ops::DerefMut, sync::Mutex};
 
-use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, writer::PieceWriter};
+use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, writer::{self}};
 
 use super::{multiple, single};
 
@@ -10,21 +10,28 @@ pub trait Solver<T, K>
     fn balance(entries: &mut [impl DerefMut<Target=Vec<T>>]);
 }
 
+pub struct PieceState {
+    written_pieces: usize,
+    failed_pieces: usize,
+    total_piece_count: usize
+}
+
 pub struct PieceSolverContext {
     pub finder: FileFinder,
-    pub writer: PieceWriter
+    pub state: Mutex<PieceState>
 }
 
 impl PieceSolverContext {
-    pub fn new(finder: FileFinder, writer: PieceWriter) -> PieceSolverContext {
+    pub fn new(finder: FileFinder, total_piece_count: usize) -> PieceSolverContext {
         PieceSolverContext {
             finder,
-            writer
+            state: Mutex::new(PieceState { written_pieces: 0, failed_pieces: 0, total_piece_count: total_piece_count})
         }
     }
 }
 
 pub struct PieceSolver;
+
 
 impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
     fn solve(mut item: OrchestrationPiece, context: &PieceSolverContext) { 
@@ -32,7 +39,7 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
             let mut is_rejected = false;
             for file in item.files.iter() {
                 if file.is_padding_file { continue; }
-                if context.finder.find_length(file.export_index).len() == 0 {
+                if context.finder.find_searches(file.export_index).len() == 0 {
                     is_rejected = true;
                     break;
                 }
@@ -47,9 +54,17 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
             };
     
             if found {
-                context.writer.write(Some(item))?
+                let mut state = context.state.lock().unwrap();
+
+                writer::write(&item, &context.finder)?;
+
+                state.written_pieces += 1;
+                println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);
             } else {
-                context.writer.write(None)?
+                let mut state = context.state.lock().unwrap();
+
+                state.failed_pieces += 1;
+                println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);
             }
             
             Ok(())

@@ -1,7 +1,7 @@
 use std::{fs::File, io::Read, path::Path, time::Instant};
 
 use clap::Parser;
-use torrent_bootstrap::{Orchestrator, OrchestratorOptions, Torrent};
+use torrent_bootstrap::{OrchestratorOptions, Torrent};
 
 #[derive(Parser)] // requires `derive` feature
 #[command(version, about, long_about = None)]
@@ -54,7 +54,7 @@ fn run() -> std::io::Result<()> {
         threads: args.threads
     };
 
-    let res = Orchestrator::start(&options);
+    let res = torrent_bootstrap::start(&options);
     let elapsed = now.elapsed().as_secs();
     println!("Time elapsed took {} seconds for {} torrents.", elapsed, torrent_len);
     res

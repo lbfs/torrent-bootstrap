@@ -51,7 +51,7 @@ fn preload<'a>(entry: &OrchestrationPiece, finder: &'a FileFinder) -> Result<Vec
         if file.is_padding_file { 
             results.push((None, vec![0; file.read_length as usize]));
         } else {
-            let search_paths = finder.find_length(file.export_index);
+            let search_paths = finder.find_searches(file.export_index);
     
             // De-duplicate identical files if the file has already been seen.
             'inner: for search_path in search_paths {

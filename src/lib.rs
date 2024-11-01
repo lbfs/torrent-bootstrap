@@ -6,6 +6,6 @@ mod writer;
 mod solver;
 
 pub use orchestrator::OrchestratorOptions;
-pub use orchestrator::Orchestrator;
+pub use orchestrator::start;
 pub use bencode::*;
 pub use torrent::*;
