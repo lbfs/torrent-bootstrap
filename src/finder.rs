@@ -48,13 +48,15 @@ impl LengthFileFinder {
 
 pub struct FileFinder {
     search: Vec<Vec<PathBuf>>,
-    path_to_index: HashMap<PathBuf, usize>
+    sizes: Vec<u64>,
+    pub path_to_index: HashMap<PathBuf, usize>, // TODO: Remove public accessor
 }
 
 impl FileFinder {
     pub fn new(torrents: &[Torrent], export_directory: &Path, length_finder: LengthFileFinder) -> FileFinder {
-        let mut export_lengths: Vec<Vec<PathBuf>> = Vec::new();
+        let mut export_search: Vec<Vec<PathBuf>> = Vec::new();
         let mut export_paths: Vec<PathBuf> = Vec::new();
+        let mut export_sizes: Vec<u64> = Vec::new();
 
         for torrent in torrents {
             if torrent.info.files.is_some() {
@@ -66,14 +68,15 @@ impl FileFinder {
 
                     sort_by_target_absolute_path(&partial_target, &full_target, entries);
 
-                    let lengths = entries
+                    let searches = entries
                         .into_iter()
                         .map(|value| value.to_path_buf())
                         .collect(); 
 
 
+                    export_sizes.push(file.length);
                     export_paths.push(full_target);
-                    export_lengths.push(lengths);
+                    export_search.push(searches);
                 }
             } else if torrent.info.length.is_some() {
                 let entries = length_finder.find_length(torrent.info.length.unwrap());
@@ -82,24 +85,26 @@ impl FileFinder {
 
                 sort_by_target_absolute_path(partial_target, &full_target, entries);
 
-                let lengths = length_finder.find_length(torrent.info.length.unwrap())
+                let searches = length_finder.find_length(torrent.info.length.unwrap())
                     .into_iter()
                     .map(|value| value.to_path_buf())
                     .collect(); 
 
+                export_sizes.push(torrent.info.length.unwrap());
                 export_paths.push(full_target);
-                export_lengths.push(lengths);
+                export_search.push(searches);
             }
         }
 
-        let mut path_to_export_lengths = HashMap::with_capacity(export_paths.len());
+        let mut path_to_index = HashMap::with_capacity(export_paths.len());
         for (index, export_path) in export_paths.into_iter().enumerate() {
-            path_to_export_lengths.insert(export_path, index);
+            path_to_index.insert(export_path, index);
         }
 
         FileFinder {
-            search: export_lengths,
-            path_to_index: path_to_export_lengths
+            search: export_search,
+            sizes: export_sizes,
+            path_to_index: path_to_index
         }
     }
 
@@ -107,12 +112,12 @@ impl FileFinder {
         self.path_to_index.get(path).copied()
     }
 
-    pub fn find_length(&self, position: usize) -> &[PathBuf] {
-        static EMPTY_RESULT: [PathBuf; 0] = [];
-        match self.search.get(position) {
-            Some(value) => value.as_ref(),
-            None => &EMPTY_RESULT
-        }
+    pub fn find_size(&self, index: usize) -> u64 {
+        *self.sizes.get(index).unwrap()
+    }
+
+    pub fn find_length(&self, index: usize) -> &[PathBuf] {
+        self.search.get(index).unwrap().as_ref()
     }
 }
 

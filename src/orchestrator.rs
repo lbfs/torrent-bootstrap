@@ -105,22 +105,18 @@ impl Orchestrator {
 
         // Validate entries
         // Solvers will weigh the identical paths as higher, and writer will skip any parts that have already been written
-        for entry in work.iter() {
-            for file in entry.files.iter() {
-                let expected_file_length = file.file_length;
+        for (export_path, index) in finder.path_to_index.iter() {
+            let expected_file_length = finder.find_size(*index);
 
-                if !file.export.exists() {
-                    continue;
-                }
+            if !export_path.exists() {
+                continue;
+            }
 
-                let handle = File::open(&file.export)?;
-                if handle.metadata()?.len() != expected_file_length {
-                    Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file does not match the file length in the piece. Aborting to prevent accidental data loss."))?
-                }
+            let handle = File::open(export_path)?;
+            if handle.metadata()?.len() != expected_file_length {
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file does not match the file length in the piece. Aborting to prevent accidental data loss."))?
             }
         }
-
-
 
         // Setup Writer
         let writer = PieceWriter::new(work.len());
