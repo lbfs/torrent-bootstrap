@@ -1,12 +1,12 @@
 use std::{
     fs::File,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::Instant,
 };
 
 use crate::{
-    finder::{format_path, FileFinder, LengthFileFinder},
+    finder::{FileFinder, LengthFileFinder},
     get_sha1_hexdigest,
     solver::{run, PieceSolver, PieceSolverContext},
     torrent::{Pieces, Torrent}
@@ -94,12 +94,12 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
     );
 
     // Setup work
-    let work = convert_pieces_to_work(&options.torrents, &options.export_directory, &finder);
+    let work = convert_pieces_to_work(&options.torrents);
 
     // Validate entries
     // Solvers will weigh the identical paths as higher, and writer will skip any parts that have already been written
-    for (export_path, index) in finder.path_to_index.iter() {
-        let expected_file_length = finder.find_length(*index);
+    for (index, export_path) in finder.index_to_path.iter().enumerate() {
+        let expected_file_length = finder.find_length(index);
 
         if !export_path.exists() {
             continue;
@@ -123,11 +123,11 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
 }
 
 fn convert_pieces_to_work(
-    torrents: &[Torrent],
-    export_directory: &Path,
-    finder: &FileFinder
+    torrents: &[Torrent]
 ) -> Vec<OrchestrationPiece> {
     let mut results = Vec::new();
+
+    let mut base_index = 0;
 
     for torrent in torrents {
         let pieces = Pieces::from_torrent(torrent);
@@ -136,16 +136,13 @@ fn convert_pieces_to_work(
             let mut orchestration_piece_files: Vec<OrchestrationPieceFile> = Vec::new();
 
             for file in piece.files {
-                let export = format_path(&file, torrent, export_directory);
-                let export_index = finder.find_index_from_path(&export);
-
                 orchestration_piece_files.push(OrchestrationPieceFile {
                     read_length: file.read_length,
                     read_start_position: file.read_start_position,
                     is_padding_file: file.is_padding_file,
                     bytes: None,
                     source: None,
-                    export_index
+                    export_index: file.file_index + base_index
                 });
             }
 
@@ -155,6 +152,12 @@ fn convert_pieces_to_work(
             };
 
             results.push(matchable);
+        }
+
+        if torrent.info.files.is_some() {
+            base_index += torrent.info.files.as_ref().unwrap().len();
+        } else if torrent.info.length.is_some() {
+            base_index += 1;
         }
     }
 

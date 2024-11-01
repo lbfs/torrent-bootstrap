@@ -3,7 +3,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::{get_sha1_hexdigest, PieceFile, Torrent};
+use crate::{get_sha1_hexdigest, Torrent};
 use crate::File as TorrentFile;
 
 pub struct LengthFileFinder {
@@ -64,8 +64,7 @@ impl LengthFileFinder {
 pub struct FileFinder {
     search: Vec<Vec<PathBuf>>,
     lengths: Vec<u64>,
-    index_to_path: Vec<PathBuf>,
-    pub path_to_index: HashMap<PathBuf, usize>, // TODO: Remove public accessor
+    pub index_to_path: Vec<PathBuf>
 }
 
 impl FileFinder {
@@ -112,25 +111,15 @@ impl FileFinder {
             }
         }
 
-        let mut path_to_index = HashMap::with_capacity(index_to_path.len());
-        for (index, export_path) in index_to_path.iter().enumerate() {
-            path_to_index.insert(export_path.clone(), index);
-        }
-
         FileFinder {
             search: export_search,
             lengths: export_lengths,
-            path_to_index: path_to_index,
             index_to_path: index_to_path
         }
     }
 
     pub fn find_path_from_index(&self, index: usize) -> &PathBuf {
         self.index_to_path.get(index).unwrap()
-    }
-
-    pub fn find_index_from_path(&self, path: &Path) -> usize {
-        *self.path_to_index.get(path).unwrap()
     }
 
     pub fn find_length(&self, index: usize) -> u64 {
@@ -212,32 +201,4 @@ fn format_path_single(torrent: &Torrent, export_directory: &Path) -> PathBuf {
     [export_directory, info_hash_path, data, torrent_name]
         .iter()
         .collect()
-}
-
-pub fn format_path(file: &PieceFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {
-    let data = Path::new("Data");
-    let info_hash_as_human = get_sha1_hexdigest(&torrent.info_hash);
-    let info_hash_path = Path::new(&info_hash_as_human);
-    let torrent_name = Path::new(&torrent.info.name);
-
-    if torrent.info.files.is_some() {
-        [
-            export_directory,
-            info_hash_path,
-            data,
-            torrent_name,
-            file.file_path.as_path(),
-        ]
-        .iter()
-        .collect()
-    } else {
-        [
-            export_directory,
-            info_hash_path,
-            data,
-            file.file_path.as_path(),
-        ]
-        .iter()
-        .collect()
-    }
 }
