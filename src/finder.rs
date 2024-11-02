@@ -12,34 +12,50 @@ pub struct LengthFileFinder {
 
 impl LengthFileFinder {
     pub fn new(torrents: &[Torrent], scan_directories: &[PathBuf]) -> LengthFileFinder {
-        // Unique File Lengths
-        let mut lengths: HashSet<u64> = HashSet::new();
+        let mut unique_lengths: HashSet<u64> = HashSet::new();
 
         for torrent in torrents {
             if torrent.info.length.is_some() {
-                lengths.insert(torrent.info.length.unwrap());
+                unique_lengths.insert(torrent.info.length.unwrap());
             } else if torrent.info.files.is_some() {
                 for file in torrent.info.files.as_ref().unwrap() {
-                    lengths.insert(file.length);
+                    unique_lengths.insert(file.length);
                 }
             }
         }
 
-        // Scan the disk
         let mut cache = HashMap::new();
         for scan_directory in scan_directories {
             for result in WalkDir::new(scan_directory) {
-                if let Ok(result) = result {
-                    if result.file_type().is_file() && lengths.contains(&(result.metadata().unwrap().len())) {
-                        let length = result.metadata().unwrap().len();
-                        cache.entry(length).or_default();
-                    
-                        let items: &mut Vec<PathBuf> = cache.get_mut(&length).unwrap();
-                        let path = result.into_path();
-            
-                        if !items.contains(&path) {
-                            items.push(path);
-                        }
+                if let Err(e) = result {
+                    eprintln!("Encountered error while searching directory: {}", e);
+                    continue;
+                }
+
+                let result = result.unwrap();
+                let metadata = result.metadata();
+
+                if let Err(e) = result.metadata() {
+                    eprintln!("Encountered error while reading metadata {}", e);
+                    continue;
+                }
+
+                let metadata = metadata.unwrap();
+                
+                if !metadata.is_file() {
+                    continue;
+                }
+
+                let file_length = metadata.len();
+
+                if unique_lengths.contains(&file_length) {
+                    cache.entry(file_length).or_default();
+                
+                    let items: &mut Vec<PathBuf> = cache.get_mut(&file_length).unwrap();
+                    let path = result.into_path();
+
+                    if !items.contains(&path) {
+                        items.push(path);
                     }
                 }
             }
@@ -64,7 +80,7 @@ impl LengthFileFinder {
 pub struct FileFinder {
     search: Vec<Vec<PathBuf>>,
     lengths: Vec<u64>,
-    pub index_to_path: Vec<PathBuf>
+    index_to_path: Vec<PathBuf>
 }
 
 impl FileFinder {
@@ -118,6 +134,10 @@ impl FileFinder {
         }
     }
 
+    pub fn get_paths_in_index_order(&self) -> &[PathBuf] {
+        &self.index_to_path
+    }
+
     pub fn find_path_from_index(&self, index: usize) -> &PathBuf {
         self.index_to_path.get(index).unwrap()
     }
@@ -132,7 +152,7 @@ impl FileFinder {
 }
 
 pub(crate) fn read_bytes(
-    path: &PathBuf,
+    path: &Path,
     read_length: u64,
     read_start_position: u64,
 ) -> Result<Vec<u8>, std::io::Error> {

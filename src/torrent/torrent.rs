@@ -1,7 +1,7 @@
 use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeToken, Parser};
 use super::{calculate_info_hash, error::TorrentErrorKind, TorrentError};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Torrent {
     pub announce: Option<String>,
     pub announce_list: Option<Vec<Vec<String>>>,
@@ -14,13 +14,13 @@ pub struct Torrent {
     pub info_hash: Vec<u8>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct File {
     pub length: u64,
     pub path: Vec<String>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Info {
     pub name: String,
     pub length: Option<u64>,

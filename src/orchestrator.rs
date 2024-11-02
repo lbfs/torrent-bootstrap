@@ -1,5 +1,5 @@
 use std::{
-    fs::File,
+    fs::{self, File},
     path::PathBuf,
     sync::Arc,
     time::Instant,
@@ -7,7 +7,6 @@ use std::{
 
 use crate::{
     finder::{FileFinder, LengthFileFinder},
-    get_sha1_hexdigest,
     solver::{run, PieceSolver, PieceSolverContext},
     torrent::{Pieces, Torrent}
 };
@@ -41,52 +40,26 @@ pub struct OrchestratorOptions {
 pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
     let now = Instant::now();
 
-    // Make sure paths are allowed
-    for scan_directory in options.scan_directories.iter() {
-        if !(scan_directory.exists() && scan_directory.is_dir()) {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Scan directory does not exist or is not a directory.",
-            ))?
-        }
-
-        if !scan_directory.is_absolute() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Scan directory must be an absolute path.",
-            ))?
-        }
-    }
-
-    // Check export path to make sure it is valid also.
-    if !(options.export_directory.exists() && options.export_directory.is_dir()) {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Export directory does not exist or is not a directory.",
-        ))?
-    }
-
-    if !options.export_directory.is_absolute() {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Export directory must be an absolute path.",
-        ))?
-    }
+    validate_input_paths(options)?;
 
     // Make sure we don't have duplicate torrents
-    let mut hashes = Vec::with_capacity(options.torrents.len());
-    for torrent in options.torrents.iter() {
-        if hashes.contains(torrent.info_hash.as_ref()) {
-            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Passed torrent {} more than once. The input list to the orchestrator must be unique.", get_sha1_hexdigest(&torrent.info_hash))))?
-        }
+    let initial_torrent_count = options.torrents.len();
 
-        hashes.push(torrent.info_hash.clone());
+    let mut torrents = options.torrents.to_vec();
+    torrents.sort_by(|a, b| {
+        a.info_hash.cmp(&b.info_hash)
+    });
+    torrents.dedup_by(|a, b| {
+        a.info_hash.cmp(&b.info_hash).is_eq()
+    });
+
+    if torrents.len() != initial_torrent_count {
+        println!("Removed {} duplicated torrents from the input list.", initial_torrent_count - torrents.len());
     }
-    drop(hashes);
 
     // Setup the finder
-    let length_file_finder = LengthFileFinder::new(&options.torrents, &options.scan_directories);
-    let finder = FileFinder::new(&options.torrents, &options.export_directory, length_file_finder);
+    let length_file_finder = LengthFileFinder::new(&torrents, &options.scan_directories);
+    let finder = FileFinder::new(&torrents, &options.export_directory, length_file_finder);
 
     println!(
         "File finder finished caching and finished at {} seconds.",
@@ -94,11 +67,11 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
     );
 
     // Setup work
-    let work = convert_pieces_to_work(&options.torrents);
+    let work = convert_pieces_to_work(&torrents);
 
     // Validate entries
     // Solvers will weigh the identical paths as higher, and writer will skip any parts that have already been written
-    for (index, export_path) in finder.index_to_path.iter().enumerate() {
+    for (index, export_path) in finder.get_paths_in_index_order().iter().enumerate() {
         let expected_file_length = finder.find_length(index);
 
         if !export_path.exists() {
@@ -162,4 +135,62 @@ fn convert_pieces_to_work(
     }
 
     results
+}
+
+fn validate_input_paths(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
+    // Make sure all input scan paths are absolute and are proper directories
+    for scan_directory in options.scan_directories.iter() {
+        if !scan_directory.is_absolute() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Scan directory must be an absolute path.",
+            ))?
+        }
+    
+        match fs::metadata(scan_directory) {
+            Ok(metadata) => {
+                if !metadata.is_dir() {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Scan directory is not a directory.",
+                    ))?
+                }
+            },
+            Err(e) => {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Could not open scan directory: {}", e),
+                ))?
+            },
+        }
+    }
+
+    // Same thing as above, but for the export path.
+    {
+        if !options.export_directory.is_absolute() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Export directory must be an absolute path.",
+            ))?
+        }
+    
+        match fs::metadata(&options.export_directory) {
+            Ok(metadata) => {
+                if !metadata.is_dir() {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Export directory is not a directory.",
+                    ))?
+                }
+            },
+            Err(e) => {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Could not open export directory: {}", e),
+                ))?
+            },
+        }
+    }
+
+    Ok(())
 }

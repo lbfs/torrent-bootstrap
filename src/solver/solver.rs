@@ -32,7 +32,6 @@ impl PieceSolverContext {
 
 pub struct PieceSolver;
 
-
 impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
     fn solve(mut item: OrchestrationPiece, context: &PieceSolverContext) { 
         let res: Result<(), std::io::Error> = (|| {
