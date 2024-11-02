@@ -1,4 +1,4 @@
-use std::{ops::DerefMut, sync::Mutex};
+use std::{ops::DerefMut, path::PathBuf, sync::Mutex};
 
 use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, writer::{self}};
 
@@ -8,6 +8,11 @@ pub trait Solver<T, K>
 {
     fn solve(item: T, context: &K);
     fn balance(entries: &mut [impl DerefMut<Target=Vec<T>>]);
+}
+
+pub struct PieceMatchResult<'a> {
+    pub source: Vec<Option<&'a PathBuf>>,
+    pub bytes: Vec<u8>
 }
 
 pub struct PieceState {
@@ -33,7 +38,7 @@ impl PieceSolverContext {
 pub struct PieceSolver;
 
 impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
-    fn solve(mut item: OrchestrationPiece, context: &PieceSolverContext) { 
+    fn solve(item: OrchestrationPiece, context: &PieceSolverContext) { 
         let res: Result<(), std::io::Error> = (|| {
             let mut is_rejected = false;
             for file in item.files.iter() {
@@ -44,18 +49,23 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
                 }
             }
 
-            let found = if is_rejected {
-                false
-            } else if item.files.len() == 1 {
-                single::scan(&context.finder, &mut item)?
-            } else {
-                multiple::scan(&context.finder, &mut item)?
-            };
-    
-            if found {
+            if is_rejected {
                 let mut state = context.state.lock().unwrap();
 
-                writer::write(&item, &context.finder)?;
+                state.failed_pieces += 1;
+                println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);
+            }
+
+            let found = if item.files.len() == 1 {
+                single::scan(&context.finder, &item)?
+            } else {
+                multiple::scan(&context.finder, &item)?
+            };
+    
+            if let Some(found) = found {
+                let mut state = context.state.lock().unwrap();
+
+                writer::write(&item, &found, &context.finder)?;
 
                 state.written_pieces += 1;
                 println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);

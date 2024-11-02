@@ -19,8 +19,6 @@ pub struct OrchestrationPieceFile {
     pub is_padding_file: bool,
 
     // Filled out by orchestration
-    pub bytes: Option<Vec<u8>>,
-    pub source: Option<PathBuf>,
     pub export_index: usize,
 }
 
@@ -113,8 +111,6 @@ fn convert_pieces_to_work(
                     read_length: file.read_length,
                     read_start_position: file.read_start_position,
                     is_padding_file: file.is_padding_file,
-                    bytes: None,
-                    source: None,
                     export_index: file.file_index + base_index
                 });
             }

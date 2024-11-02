@@ -2,12 +2,14 @@ use sha1::{Digest, Sha1};
 
 use crate::{finder::{read_bytes, FileFinder}, orchestrator::OrchestrationPiece};
 
-pub fn scan(
-    finder: &FileFinder,
-    entry: &mut OrchestrationPiece,
-) -> Result<bool, std::io::Error> {
+use super::PieceMatchResult;
 
-    let first_file = entry.files.first_mut().unwrap();
+pub fn scan<'a>(
+    finder: &'a FileFinder,
+    entry: &OrchestrationPiece,
+) -> Result<Option<PieceMatchResult<'a>>, std::io::Error> {
+
+    let first_file = entry.files.first().unwrap();
     let search_paths = finder.find_searches(first_file.export_index);
 
     for search_path in search_paths {
@@ -18,11 +20,12 @@ pub fn scan(
         let hash = hasher.finalize();
 
         if entry.hash.as_slice().cmp(&hash).is_eq() {
-            first_file.bytes = Some(bytes);
-            first_file.source = Some(search_path.clone());
-            return Ok(true);
+            return Ok(Some(PieceMatchResult { 
+                bytes: bytes, 
+                source: vec![Some(search_path)]
+            }));
         }
     }
 
-    Ok(false)
+    Ok(None)
 }

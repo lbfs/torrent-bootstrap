@@ -4,42 +4,53 @@ use sha1::{Digest, Sha1};
 
 use crate::{finder::{read_bytes, FileFinder}, orchestrator::OrchestrationPiece};
 
-pub fn scan(
-    finder: &FileFinder,
-    mut entry: &mut OrchestrationPiece,
-) -> Result<bool, std::io::Error> {
+use super::PieceMatchResult;
+
+pub fn scan<'a>(
+    finder: &'a FileFinder,
+    entry: &OrchestrationPiece,
+) -> Result<Option<PieceMatchResult<'a>>, std::io::Error> {
     let loaded = preload(entry, finder)?;
-    scan_internal(0, Sha1::new(), &loaded, &mut entry)
+
+    let mut output_buffer = Vec::new();
+    let mut output_paths = Vec::new();
+
+    let found = scan_internal(0, &mut output_buffer, &mut output_paths, &loaded, &entry);
+
+    Ok(if found { Some(PieceMatchResult { bytes: output_buffer, source: output_paths }) } else { None })
 }
 
 fn scan_internal<'a>(
     depth: usize,
-    hasher: Sha1,
+    output_buffer: &mut Vec<u8>,
+    output_paths: &mut Vec<Option<&'a PathBuf>>, 
     finder: &Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>,
-    entry: &mut OrchestrationPiece
-) -> Result<bool, std::io::Error> {
+    entry: &OrchestrationPiece
+) -> bool {
     let entries = &finder[depth];
 
     for (path, read_buffer) in entries.into_iter() {
-        let mut hasher = hasher.clone();
-        hasher.update(&read_buffer);
+        let original_length = output_buffer.len();
+        output_buffer.extend(read_buffer);
+        output_paths.push(*path);
 
         let valid = if depth + 1 == entry.files.len() {
-            let hash = hasher.finalize();
-            entry.hash.as_slice().cmp(&hash).is_eq()
+            let mut hasher = Sha1::new();
+            hasher.update(&output_buffer);
+            entry.hash.as_slice().cmp(&hasher.finalize()).is_eq()
         } else {
-            scan_internal(depth + 1, hasher, finder, entry)?
+            scan_internal(depth + 1, output_buffer, output_paths, finder, entry)
         };
 
         if valid {
-            let depth_file = entry.files.get_mut(depth).unwrap();
-            depth_file.bytes = Some(read_buffer.clone());
-            depth_file.source = if let Some(path) = path { Some(path.to_path_buf()) } else { None };
-            return Ok(valid);
+            return valid;
         }
+
+        output_paths.pop();
+        output_buffer.truncate(original_length);
     }
 
-    Ok(false)
+    false
 }
 
 fn preload<'a>(entry: &OrchestrationPiece, finder: &'a FileFinder) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
