@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use sha1::{Digest, Sha1};
+use sha1::{digest::core_api::CoreWrapper, Digest, Sha1, Sha1Core};
 
 use crate::{finder::{read_bytes, FileFinder}, orchestrator::OrchestrationPiece};
 
@@ -12,42 +12,59 @@ pub fn scan<'a>(
 ) -> Result<Option<PieceMatchResult<'a>>, std::io::Error> {
     let loaded = preload(entry, finder)?;
 
-    let mut output_buffer = Vec::new();
-    let mut output_paths = Vec::new();
+    let mut check = Vec::with_capacity(loaded.len());
+    for _ in 0..loaded.len() { check.push(0); }
 
-    let found = scan_internal(0, &mut output_buffer, &mut output_paths, &loaded, &entry);
+    let mut hasher = Sha1::new();
 
-    Ok(if found { Some(PieceMatchResult { bytes: output_buffer, source: output_paths }) } else { None })
+    let found = scan_internal(0, &mut hasher, &mut check, &loaded, &entry);
+
+    Ok(if found { 
+        let mut output_buffer = Vec::new();
+        let mut output_paths = Vec::new();
+
+        for (depth, index) in check.iter().enumerate() {
+            let index = *index;
+
+            let (path, value) = &loaded[depth][index];
+            output_buffer.extend(value);
+            output_paths.push(*path);
+        }
+
+        Some(PieceMatchResult { bytes: output_buffer, source: output_paths })
+     } else { 
+        None 
+    })
 }
 
 fn scan_internal<'a>(
     depth: usize,
-    output_buffer: &mut Vec<u8>,
-    output_paths: &mut Vec<Option<&'a PathBuf>>, 
+    hasher: &mut CoreWrapper<Sha1Core>,
+    check: &mut [usize],
     finder: &Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>,
     entry: &OrchestrationPiece
 ) -> bool {
     let entries = &finder[depth];
 
-    for (path, read_buffer) in entries.into_iter() {
-        let original_length = output_buffer.len();
-        output_buffer.extend(read_buffer);
-        output_paths.push(*path);
+    for entry_index in 0..entries.len() {
+        check[depth] = entry_index;
 
         let valid = if depth + 1 == entry.files.len() {
-            let mut hasher = Sha1::new();
-            hasher.update(&output_buffer);
-            entry.hash.as_slice().cmp(&hasher.finalize()).is_eq()
+            for (depth, index) in check.iter().enumerate() {
+                let index = *index;
+                let (_, value) = &finder[depth][index];
+                hasher.update(value);
+
+            }
+
+            entry.hash.as_slice().cmp(&hasher.finalize_reset()).is_eq()
         } else {
-            scan_internal(depth + 1, output_buffer, output_paths, finder, entry)
+            scan_internal(depth + 1, hasher, check, finder, entry)
         };
 
         if valid {
             return valid;
         }
-
-        output_paths.pop();
-        output_buffer.truncate(original_length);
     }
 
     false
