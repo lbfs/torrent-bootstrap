@@ -97,9 +97,9 @@ impl FileFinder {
                     let partial_target = file.path.iter().collect::<PathBuf>();
                     let full_target = format_path_multiple(file, torrent, export_directory);
 
-                    sort_by_target_absolute_path(&partial_target, &full_target, entries);
+                    let sorted = sort_by_target_absolute_path(&partial_target, &full_target, entries);
 
-                    let searches = entries
+                    let searches = sorted
                         .into_iter()
                         .map(|value| value.to_path_buf())
                         .collect(); 
@@ -114,9 +114,9 @@ impl FileFinder {
                 let full_target = format_path_single(torrent, export_directory);
                 let partial_target = Path::new(&torrent.info.name);
 
-                sort_by_target_absolute_path(partial_target, &full_target, entries);
+                let sorted = sort_by_target_absolute_path(partial_target, &full_target, entries);
 
-                let searches = length_finder.find_length(torrent.info.length.unwrap())
+                let searches = sorted
                     .into_iter()
                     .map(|value| value.to_path_buf())
                     .collect(); 
@@ -173,30 +173,37 @@ pub(crate) fn read_bytes_with_handle(
     Ok(read_bytes)
 }
 
+
 pub(crate) fn sort_by_target_absolute_path<'a>(partial_target: &Path, full_target: &Path, entries: &'a [PathBuf]) -> Vec<&'a PathBuf> {
     let mut entries: Vec<&PathBuf> = entries.iter().collect();
 
     // Sort by filename so that we check most-matching path first before checking 
     // other random files.
-    entries.sort_by(|a, b| {
-        let mut left = a.ends_with(partial_target) as usize;
-        let mut right = b.ends_with(partial_target) as usize;
+    entries.sort_by(|a: &&PathBuf, b| {
+        let left = if a.ends_with(&full_target) { 
+            3 
+        } else if a.ends_with(&partial_target) {
+            2
+        } else if a.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
+            1
+        } else {
+            0
+        };
 
-        left += (*a).eq(full_target) as usize;
-        right += (*b).eq(full_target) as usize;
-        
-        if let Some(source) = partial_target.file_name() {
-            if let Some(left_filename) = a.file_name() {
-                left += source.cmp(left_filename).is_eq() as usize;
-            }
+        let right = if b.ends_with(&full_target) { 
+            3 
+        } else if b.ends_with(&partial_target) {
+            2
+        } else if b.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
+            1
+        } else {
+            0
+        };
 
-            if let Some(right_filename) = b.file_name() {
-                right += source.cmp(right_filename).is_eq() as usize;
-            }
-        }
-
-        left.cmp(&right).reverse()
+        left.cmp(&right)
     });
+
+    entries.reverse();
 
     entries
 }
