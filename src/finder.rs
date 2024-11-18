@@ -49,9 +49,7 @@ impl LengthFileFinder {
                 let file_length = metadata.len();
 
                 if unique_lengths.contains(&file_length) {
-                    cache.entry(file_length).or_default();
-                
-                    let items: &mut Vec<PathBuf> = cache.get_mut(&file_length).unwrap();
+                    let items: &mut Vec<PathBuf> = cache.entry(file_length).or_default();
                     let path = result.into_path();
 
                     if !items.contains(&path) {
@@ -78,7 +76,7 @@ impl LengthFileFinder {
 
 #[derive(Clone)]
 pub struct FileFinder {
-    search: Vec<Vec<PathBuf>>,
+    pub search: Vec<Vec<PathBuf>>,
     lengths: Vec<u64>,
     index_to_path: Vec<PathBuf>
 }
@@ -179,31 +177,29 @@ pub(crate) fn sort_by_target_absolute_path<'a>(partial_target: &Path, full_targe
 
     // Sort by filename so that we check most-matching path first before checking 
     // other random files.
-    entries.sort_by(|a: &&PathBuf, b| {
+    entries.sort_by(|a, b| {
         let left = if a.ends_with(&full_target) { 
-            3 
-        } else if a.ends_with(&partial_target) {
-            2
-        } else if a.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
-            1
-        } else {
             0
+        } else if a.ends_with(&partial_target) {
+            1
+        } else if a.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
+            2
+        } else {
+            3
         };
 
         let right = if b.ends_with(&full_target) { 
-            3 
-        } else if b.ends_with(&partial_target) {
-            2
-        } else if b.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
-            1
-        } else {
             0
+        } else if b.ends_with(&partial_target) {
+            1
+        } else if b.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
+            2
+        } else {
+            3
         };
 
         left.cmp(&right)
     });
-
-    entries.reverse();
 
     entries
 }

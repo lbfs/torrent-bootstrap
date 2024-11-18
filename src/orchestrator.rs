@@ -1,8 +1,5 @@
 use std::{
-    fs::{self, File},
-    path::PathBuf,
-    sync::Arc,
-    time::Instant,
+    collections::HashMap, fs::{self, OpenOptions}, path::PathBuf, sync::Arc, time::Instant
 };
 
 use crate::{
@@ -57,7 +54,7 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
 
     // Setup the finder
     let length_file_finder = LengthFileFinder::new(&torrents, &options.scan_directories);
-    let finder = FileFinder::new(&torrents, &options.export_directory, length_file_finder);
+    let mut finder = FileFinder::new(&torrents, &options.export_directory, length_file_finder);
 
     println!(
         "File finder finished caching and finished at {} seconds.",
@@ -67,19 +64,42 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
     // Setup work
     let work = convert_pieces_to_work(&torrents);
 
-    // Validate entries
-    // Solvers will weigh the identical paths as higher, and writer will skip any parts that have already been written
+    // Validate we aren't corrupting data; or that we haven't missed any files due to pre-allocation not happening.
+    let mut updates: HashMap<usize, PathBuf> = HashMap::new();
+    
     for (index, export_path) in finder.get_paths_in_index_order().iter().enumerate() {
         let expected_file_length = finder.find_length(index);
 
-        if !export_path.exists() {
-            continue;
+        let handle = OpenOptions::new().write(true).create(false).open(export_path);
+        if handle.is_err() {
+            if handle.as_ref().unwrap_err().kind() == std::io::ErrorKind::NotFound {
+                continue;
+            }
+
+            return Err(handle.unwrap_err());
         }
 
-        let handle = File::open(export_path)?;
-        if handle.metadata()?.len() != expected_file_length {
-            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file does not match the file length in the piece. Aborting to prevent accidental data loss."))?
+        let handle = handle.unwrap();
+        let actual_file_length = handle.metadata()?.len();
+
+        if actual_file_length > expected_file_length {
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file is greater than the file length in the piece. Aborting to prevent accidental data loss."))?
+        } else if actual_file_length != expected_file_length {
+
+            // TODO: We might not want to preallocate to save space... but I don't think this a real problem to solve right now.
+            handle.set_len(expected_file_length)?;
+
+            for scan_directory in &options.scan_directories {
+                if export_path.starts_with(scan_directory) {
+                    updates.insert(index, export_path.to_path_buf());
+                    break;
+                }
+            }
         }
+    }
+
+    for (index, path) in updates.into_iter() {
+        finder.search[index].insert(0, path);
     }
 
     // Start processing the work

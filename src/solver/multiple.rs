@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use sha1::{digest::core_api::CoreWrapper, Digest, Sha1, Sha1Core};
+use sha1::{Digest, Sha1};
 
 use crate::{finder::{read_bytes, FileFinder}, orchestrator::OrchestrationPiece};
 
@@ -15,17 +15,14 @@ pub fn scan<'a>(
     let mut check = Vec::with_capacity(loaded.len());
     for _ in 0..loaded.len() { check.push(0); }
 
-    let mut hasher = Sha1::new();
 
-    let found = scan_internal(0, &mut hasher, &mut check, &loaded, &entry);
+    let found = scan_internal(0, &mut check, &loaded, &entry);
 
     Ok(if found { 
         let mut output_buffer = Vec::new();
         let mut output_paths = Vec::new();
 
-        for (depth, index) in check.iter().enumerate() {
-            let index = *index;
-
+        for (depth, index) in check.into_iter().enumerate() {
             let (path, value) = &loaded[depth][index];
             output_buffer.extend(value);
             output_paths.push(*path);
@@ -39,7 +36,6 @@ pub fn scan<'a>(
 
 fn scan_internal<'a>(
     depth: usize,
-    hasher: &mut CoreWrapper<Sha1Core>,
     check: &mut [usize],
     finder: &Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>,
     entry: &OrchestrationPiece
@@ -50,6 +46,7 @@ fn scan_internal<'a>(
         check[depth] = entry_index;
 
         let valid = if depth + 1 == entry.files.len() {
+            let mut hasher = Sha1::new();
             for (depth, index) in check.iter().enumerate() {
                 let index = *index;
                 let (_, value) = &finder[depth][index];
@@ -59,7 +56,7 @@ fn scan_internal<'a>(
 
             entry.hash.as_slice().cmp(&hasher.finalize_reset()).is_eq()
         } else {
-            scan_internal(depth + 1, hasher, check, finder, entry)
+            scan_internal(depth + 1, check, finder, entry)
         };
 
         if valid {

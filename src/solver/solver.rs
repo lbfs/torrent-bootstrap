@@ -49,14 +49,9 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
                 }
             }
 
-            if is_rejected {
-                let mut state = context.state.lock().unwrap();
-
-                state.failed_pieces += 1;
-                println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);
-            }
-
-            let found = if item.files.len() == 1 {
+            let found = if is_rejected {
+                None
+            } else if item.files.len() == 1 {
                 single::scan(&context.finder, &item)?
             } else {
                 multiple::scan(&context.finder, &item)?
@@ -68,12 +63,23 @@ impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
                 writer::write(&item, &found, &context.finder)?;
 
                 state.written_pieces += 1;
-                println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);
+                println!("{} of {} total pieces written - availability: {:.02}% scanned: {:.02}% (failed {})", 
+                    state.written_pieces, 
+                    state.total_piece_count, 
+                    (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, 
+                    ((state.written_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100 as f64, 
+                    state.failed_pieces
+                );
             } else {
                 let mut state = context.state.lock().unwrap();
-
                 state.failed_pieces += 1;
-                println!("{} of {} total pieces written - {:.02}% (failed {})", state.written_pieces, state.total_piece_count, (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, state.failed_pieces);
+                println!("{} of {} total pieces written - availability: {:.02}% scanned: {:.02}% (failed {})", 
+                    state.written_pieces, 
+                    state.total_piece_count, 
+                    (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, 
+                    ((state.written_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100 as f64, 
+                    state.failed_pieces
+                );            
             }
             
             Ok(())
