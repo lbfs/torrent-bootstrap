@@ -31,11 +31,7 @@ fn run() -> std::io::Result<()> {
     let mut torrents: Vec<Torrent> = Vec::new();
     for torrent_path_as_string in &args.torrents {
         let torrent_as_path = Path::new(torrent_path_as_string);
-
-        if !(torrent_as_path.exists() && torrent_as_path.is_file()) {
-            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Torrent path does not exist or is not a file."))?
-        }
-
+        
         let mut handle = File::open(torrent_as_path)?;
         let mut bytes: Vec<u8> = Vec::new(); 
         handle.read_to_end(&mut bytes)?;
