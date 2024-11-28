@@ -61,16 +61,16 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
         now.elapsed().as_secs()
     );
 
-    // Setup work
-    let work = convert_pieces_to_work(&torrents);
-
     // Validate we aren't corrupting data; or that we haven't missed any files due to pre-allocation not happening.
+    // Additionally, add any export files and treat them as part of the scan path, even if they are not explicitly defined there
+    // This will stop additional writes that do not need to occur. 
     let mut updates: HashMap<usize, PathBuf> = HashMap::new();
     
     for (index, export_path) in finder.get_paths_in_index_order().iter().enumerate() {
         let expected_file_length = finder.find_length(index);
 
         let handle = OpenOptions::new().write(true).create(false).open(export_path);
+
         if handle.is_err() {
             if handle.as_ref().unwrap_err().kind() == std::io::ErrorKind::NotFound {
                 continue;
@@ -85,22 +85,27 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
         if actual_file_length > expected_file_length {
             Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file is greater than the file length in the piece. Aborting to prevent accidental data loss."))?
         } else if actual_file_length != expected_file_length {
-
             // TODO: We might not want to preallocate to save space... but I don't think this a real problem to solve right now.
             handle.set_len(expected_file_length)?;
-
-            for scan_directory in &options.scan_directories {
-                if export_path.starts_with(scan_directory) {
-                    updates.insert(index, export_path.to_path_buf());
-                    break;
-                }
-            }
         }
+
+        updates.insert(index, export_path.to_path_buf());
     }
 
     for (index, path) in updates.into_iter() {
-        finder.search[index].insert(0, path);
+        let found = finder
+            .find_searches(index)
+            .iter()
+            .find(|search| (*search).eq(&path)); 
+
+        if found.is_none() {
+            println!("Adding {:#?} as it is not defined in the search path.", path);
+            finder.search[index].insert(0, path);
+        }
     }
+
+    // Setup work
+    let work = convert_pieces_to_work(&torrents);
 
     // Start processing the work
     println!("Solver started at {} seconds.", now.elapsed().as_secs());
