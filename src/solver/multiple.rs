@@ -12,9 +12,7 @@ pub fn scan<'a>(
 ) -> Result<Option<PieceMatchResult<'a>>, std::io::Error> {
     let loaded = preload(entry, finder)?;
 
-    let mut check = Vec::with_capacity(loaded.len());
-    for _ in 0..loaded.len() { check.push(0); }
-
+    let mut check = vec![0; loaded.len()];
 
     let found = scan_internal(0, &mut check, &loaded, &entry);
 
@@ -47,13 +45,14 @@ fn scan_internal<'a>(
 
         let valid = if depth + 1 == entry.files.len() {
             let mut hasher = Sha1::new();
+            
             for (depth, index) in check.iter().enumerate() {
                 let index = *index;
-                let (_, value) = &finder[depth][index];
+                let value = &finder[depth][index].1;
                 hasher.update(value);
 
             }
-
+            
             entry.hash.as_slice().cmp(&hasher.finalize_reset()).is_eq()
         } else {
             scan_internal(depth + 1, check, finder, entry)
