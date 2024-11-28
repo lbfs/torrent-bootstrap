@@ -73,12 +73,12 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
 
         let handle = OpenOptions::new().write(true).create(false).open(export_path);
 
-        if handle.is_err() {
-            if handle.as_ref().unwrap_err().kind() == std::io::ErrorKind::NotFound {
+        if let Err(err) = handle {
+            if err.kind() == std::io::ErrorKind::NotFound {
                 continue;
             }
 
-            return Err(handle.unwrap_err());
+            return Err(err);
         }
 
         let handle = handle.unwrap();
