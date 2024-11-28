@@ -158,60 +158,29 @@ fn convert_pieces_to_work(
     results
 }
 
-fn validate_input_paths(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
-    // Make sure all input scan paths are absolute and are proper directories
-    for scan_directory in options.scan_directories.iter() {
-        if !scan_directory.is_absolute() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Scan directory must be an absolute path.",
-            ))?
-        }
-    
-        match fs::metadata(scan_directory) {
-            Ok(metadata) => {
-                if !metadata.is_dir() {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Scan directory is not a directory.",
-                    ))?
-                }
-            },
-            Err(e) => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("Could not open scan directory: {}", e),
-                ))?
-            },
-        }
+fn validate_path(path: &PathBuf) -> Result<(), std::io::Error> {
+    if !path.is_absolute() {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{:#?} path must be absolute.", &path),
+        ))?
     }
 
-    // Same thing as above, but for the export path.
-    {
-        if !options.export_directory.is_absolute() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Export directory must be an absolute path.",
-            ))?
-        }
-    
-        match fs::metadata(&options.export_directory) {
-            Ok(metadata) => {
-                if !metadata.is_dir() {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Export directory is not a directory.",
-                    ))?
-                }
-            },
-            Err(e) => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("Could not open export directory: {}", e),
-                ))?
-            },
-        }
+    let metadata = fs::metadata(&path)?;
+
+    if !metadata.is_dir() {
+        Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{:#?} is not a directory.", path)))?
     }
 
     Ok(())
+}
+
+fn validate_input_paths(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
+    // Make sure all input scan paths are absolute and are proper directories
+    for scan_directory in options.scan_directories.iter() {
+        validate_path(scan_directory)?;
+    }
+
+    // Same thing as above, but for the export path.
+    validate_path(&options.export_directory)
 }
