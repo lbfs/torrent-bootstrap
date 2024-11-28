@@ -50,7 +50,7 @@ fn run() -> std::io::Result<()> {
         threads: args.threads
     };
 
-    let res = torrent_bootstrap::start(&options);
+    let res = torrent_bootstrap::start(options);
     let elapsed = now.elapsed().as_secs();
     println!("Time elapsed took {} seconds for {} torrents.", elapsed, torrent_len);
     res

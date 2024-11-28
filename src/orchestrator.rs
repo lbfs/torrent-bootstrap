@@ -32,18 +32,20 @@ pub struct OrchestratorOptions {
     pub threads: usize,
 }
 
-pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
+pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     let now = Instant::now();
+    let options = &mut options;
 
     validate_input_paths(options)?;
 
     // Make sure we don't have duplicate torrents
     let initial_torrent_count = options.torrents.len();
-
-    let mut torrents = options.torrents.to_vec();
+    let torrents = &mut options.torrents;
+    
     torrents.sort_by(|a, b| {
         a.info_hash.cmp(&b.info_hash)
     });
+    
     torrents.dedup_by(|a, b| {
         a.info_hash.cmp(&b.info_hash).is_eq()
     });
@@ -53,13 +55,13 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
     }
 
     // Setup the finder
-    let length_file_finder = LengthFileFinder::new(&torrents, &options.scan_directories);
-    let mut finder = FileFinder::new(&torrents, &options.export_directory, length_file_finder);
-
     println!(
-        "File finder finished caching and finished at {} seconds.",
+        "File finder started {} seconds.",
         now.elapsed().as_secs()
     );
+
+    let length_file_finder = LengthFileFinder::new(&torrents, &options.scan_directories);
+    let mut finder = FileFinder::new(&torrents, &options.export_directory, length_file_finder);
 
     // Validate we aren't corrupting data; or that we haven't missed any files due to pre-allocation not happening.
     // Additionally, add any export files and treat them as part of the scan path, even if they are not explicitly defined there
@@ -103,6 +105,11 @@ pub fn start(options: &OrchestratorOptions) -> Result<(), std::io::Error> {
             finder.search[index].insert(0, path);
         }
     }
+
+    println!(
+        "File finder finished caching and finished at {} seconds.",
+        now.elapsed().as_secs()
+    );
 
     // Setup work
     let work = convert_pieces_to_work(&torrents);

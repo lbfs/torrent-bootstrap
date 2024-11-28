@@ -7,7 +7,7 @@ use crate::{get_sha1_hexdigest, Torrent};
 use crate::File as TorrentFile;
 
 pub struct LengthFileFinder {
-    pub cache: HashMap<u64, Vec<PathBuf>>,
+    cache: HashMap<u64, Vec<PathBuf>>,
 }
 
 impl LengthFileFinder {
@@ -73,8 +73,6 @@ impl LengthFileFinder {
     }
 }
 
-
-#[derive(Clone)]
 pub struct FileFinder {
     pub search: Vec<Vec<PathBuf>>,
     lengths: Vec<u64>,
@@ -149,59 +147,29 @@ impl FileFinder {
     }
 }
 
-pub(crate) fn read_bytes(
-    path: &Path,
-    read_length: u64,
-    read_start_position: u64,
-) -> Result<Vec<u8>, std::io::Error> {
-    let mut handle = File::open(path)?;
-    read_bytes_with_handle(&mut handle, read_length, read_start_position)
-}
-
-pub(crate) fn read_bytes_with_handle(
-    handle: &mut File,
-    read_length: u64,
-    read_start_position: u64
-) -> Result<Vec<u8>, std::io::Error> {
-    let mut read_bytes = vec![0u8; read_length as usize];
-
-    handle.seek(SeekFrom::Start(read_start_position))?;
-    handle.read_exact(&mut read_bytes)?;
-
-    Ok(read_bytes)
-}
-
-
 pub(crate) fn sort_by_target_absolute_path<'a>(partial_target: &Path, full_target: &Path, entries: &'a [PathBuf]) -> Vec<&'a PathBuf> {
     let mut entries: Vec<&PathBuf> = entries.iter().collect();
 
-    // Sort by filename so that we check most-matching path first before checking 
-    // other random files.
     entries.sort_by(|a, b| {
-        let left = if a.ends_with(&full_target) { 
-            0
-        } else if a.ends_with(&partial_target) {
-            1
-        } else if a.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
-            2
-        } else {
-            3
-        };
-
-        let right = if b.ends_with(&full_target) { 
-            0
-        } else if b.ends_with(&partial_target) {
-            1
-        } else if b.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
-            2
-        } else {
-            3
-        };
+        let left = find_file_similarity(a, partial_target, full_target);
+        let right = find_file_similarity(b, partial_target, full_target);
 
         left.cmp(&right)
     });
 
     entries
+}
+
+fn find_file_similarity(entry: &Path, partial_target: &Path, full_target: &Path) -> usize {
+    if entry.ends_with(&full_target) { 
+        0
+    } else if entry.ends_with(&partial_target) {
+        1
+    } else if entry.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
+        2
+    } else {
+        3
+    }
 }
 
 fn format_path_multiple(file: &TorrentFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {
@@ -224,4 +192,26 @@ fn format_path_single(torrent: &Torrent, export_directory: &Path) -> PathBuf {
     [export_directory, info_hash_path, data, torrent_name]
         .iter()
         .collect()
+}
+
+pub(crate) fn read_bytes(
+    path: &Path,
+    read_length: u64,
+    read_start_position: u64,
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut handle = File::open(path)?;
+    read_bytes_with_handle(&mut handle, read_length, read_start_position)
+}
+
+pub(crate) fn read_bytes_with_handle(
+    handle: &mut File,
+    read_length: u64,
+    read_start_position: u64
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut read_bytes = vec![0u8; read_length as usize];
+
+    handle.seek(SeekFrom::Start(read_start_position))?;
+    handle.read_exact(&mut read_bytes)?;
+
+    Ok(read_bytes)
 }

@@ -4,8 +4,8 @@ use super::{error::BencodeErrorKind, BencodeError};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BencodeString {
     pub value: Vec<u8>,
-    pub(super) start_position: usize,
-    pub(super) continuation_position: usize
+    pub start_position: usize,
+    pub continuation_position: usize
 }
 
 impl BencodeString {
