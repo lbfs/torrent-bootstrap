@@ -16,7 +16,7 @@ pub struct PieceMatchResult<'a> {
 }
 
 pub struct PieceState {
-    written_pieces: usize,
+    success_pieces: usize,
     failed_pieces: usize,
     total_piece_count: usize
 }
@@ -30,62 +30,79 @@ impl PieceSolverContext {
     pub fn new(finder: FileFinder, total_piece_count: usize) -> PieceSolverContext {
         PieceSolverContext {
             finder,
-            state: Mutex::new(PieceState { written_pieces: 0, failed_pieces: 0, total_piece_count: total_piece_count})
+            state: Mutex::new(PieceState { success_pieces: 0, failed_pieces: 0, total_piece_count: total_piece_count})
         }
     }
 }
 
 pub struct PieceSolver;
 
+fn process(item: &OrchestrationPiece, context: &PieceSolverContext) -> std::io::Result<bool> {
+    let mut is_rejected = false;
+    for file in item.files.iter() {
+        if file.is_padding_file { continue; }
+        if context.finder.find_searches(file.export_index).len() == 0 {
+            is_rejected = true;
+            break;
+        }
+    }
+
+    let found = if is_rejected {
+        None
+    } else if item.files.len() == 1 {
+        single::scan(&context.finder, &item)?
+    } else {
+        multiple::scan(&context.finder, &item)?
+    };
+
+    let result = if let Some(found) = found {
+        let mut state = context.state.lock().unwrap();
+
+        writer::write(&item, &found, &context.finder)?;
+
+        state.success_pieces += 1;
+
+        let availability = (state.success_pieces as f64 / state.total_piece_count as f64) * 100 as f64;
+        let scanned = ((state.success_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100 as f64;
+
+        println!("{} of {} total pieces found - scanned: {:.02}% - availability: {:.02}%", 
+            state.success_pieces, 
+            state.total_piece_count,
+            scanned,
+            availability
+        );
+
+        true
+    } else {
+        let mut state = context.state.lock().unwrap();
+
+        state.failed_pieces += 1;
+
+        let availability = (state.success_pieces as f64 / state.total_piece_count as f64) * 100 as f64;
+        let scanned = ((state.success_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100 as f64;
+
+        println!("{} of {} total pieces found - scanned: {:.02}% - availability: {:.02}%", 
+            state.success_pieces, 
+            state.total_piece_count,
+            scanned,
+            availability
+        );
+
+        false
+    };
+
+    Ok(result)
+}
+
 impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
     fn solve(item: OrchestrationPiece, context: &PieceSolverContext) { 
-        let res: Result<(), std::io::Error> = (|| {
-            let mut is_rejected = false;
-            for file in item.files.iter() {
-                if file.is_padding_file { continue; }
-                if context.finder.find_searches(file.export_index).len() == 0 {
-                    is_rejected = true;
-                    break;
-                }
-            }
-
-            let found = if is_rejected {
-                None
-            } else if item.files.len() == 1 {
-                single::scan(&context.finder, &item)?
-            } else {
-                multiple::scan(&context.finder, &item)?
-            };
-    
-            if let Some(found) = found {
-                let mut state = context.state.lock().unwrap();
-
-                writer::write(&item, &found, &context.finder)?;
-
-                state.written_pieces += 1;
-                println!("{} of {} total pieces written - availability: {:.02}% scanned: {:.02}% (failed {})", 
-                    state.written_pieces, 
-                    state.total_piece_count, 
-                    (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, 
-                    ((state.written_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100 as f64, 
-                    state.failed_pieces
-                );
-            } else {
-                let mut state = context.state.lock().unwrap();
-                state.failed_pieces += 1;
-                println!("{} of {} total pieces written - availability: {:.02}% scanned: {:.02}% (failed {})", 
-                    state.written_pieces, 
-                    state.total_piece_count, 
-                    (state.written_pieces as f64 / state.total_piece_count as f64) * 100 as f64, 
-                    ((state.written_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100 as f64, 
-                    state.failed_pieces
-                );            
-            }
-            
-            Ok(())
-        })();
-
+        let res = process(&item, context);
+        
         if let Err(err) = res {
+            let mut state = context.state.lock().unwrap();
+
+            state.failed_pieces += 1;
+
             eprintln!("Unable to solve piece due to following error: {:#?}", err);
         }
     }

@@ -88,7 +88,6 @@ impl FileFinder {
         for torrent in torrents {
             if torrent.info.files.is_some() {
                 for file in torrent.info.files.as_ref().unwrap() {
-
                     let entries = length_finder.find_length(file.length);
                     let partial_target = file.path.iter().collect::<PathBuf>();
                     let full_target = format_path_multiple(file, torrent, export_directory);
