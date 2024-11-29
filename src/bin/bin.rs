@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read, path::Path, time::Instant};
+use std::{fs::File, io::Read, path::{Path, PathBuf}, time::Instant};
 
 use clap::Parser;
 use torrent_bootstrap::{OrchestratorOptions, Torrent};
@@ -6,20 +6,20 @@ use torrent_bootstrap::{OrchestratorOptions, Torrent};
 #[derive(Parser)] // requires `derive` feature
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Path that should be used to load a torrent
+    /// Path that should be used to load a torrent.
     #[arg(long, required = true, num_args = 1..)]
-    torrents: Vec<String>,
+    torrents: Vec<PathBuf>,
 
-    /// Absolute path that should be scanned to find identical pieces
+    /// Paths that should be scanned for matching files.
     #[arg(long, required = true, num_args = 1..)]
-    scan: Vec<String>,
+    scan: Vec<PathBuf>,
 
-    /// Absolute path where the merged or updated file should be placed.
+    /// Path where the exported file should be updated or stored. Any matching files under this export path are automatically added to the scan path.
     #[arg(long, required = true)]
-    export: String,
+    export: PathBuf,
 
-    /// Number of threads to perform scanning and hashing.
-    #[arg(long, required = true)]
+    /// Number of read threads for hashing.
+    #[arg(long, required = false, default_value_t = 1)]
     threads: usize,
 }
 
@@ -29,10 +29,8 @@ fn run() -> std::io::Result<()> {
 
     // Load Torrents
     let mut torrents: Vec<Torrent> = Vec::new();
-    for torrent_path_as_string in &args.torrents {
-        let torrent_as_path = Path::new(torrent_path_as_string);
-        
-        let mut handle = File::open(torrent_as_path)?;
+    for torrent_path in &args.torrents {
+        let mut handle = File::open(torrent_path)?;
         let mut bytes: Vec<u8> = Vec::new(); 
         handle.read_to_end(&mut bytes)?;
         let torrent = Torrent::from_bytes(&bytes)

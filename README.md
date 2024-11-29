@@ -9,13 +9,15 @@ This utility is designed to solve a few niche purposes when working with torrent
 ### How to run
 
 ```
-Usage: torrent_bootstrap --torrents <TORRENTS>... --scan <SCAN>... --export <EXPORT> --threads <THREADS>
+Usage: torrent_bootstrap [OPTIONS] --torrents <TORRENTS>... --scan <SCAN>... --export <EXPORT>
 
 Options:
       --torrents <TORRENTS>...  Path that should be used to load a torrent
-      --scan <SCAN>...          Absolute path that should be scanned to find identical pieces
-      --export <EXPORT>         Absolute path where the merged or updated file should be placed
-      --threads <THREADS>       Number of threads to perform scanning and hashing
+      --scan <SCAN>...          Paths that should be scanned for matching files
+      --export <EXPORT>         Path where the exported file should be updated or stored.  
+                                Any matching files under this export path are automatically 
+                                added to the scan path
+      --threads <THREADS>       Number of read threads for hashing [default: 1]
   -h, --help                    Print help
   -V, --version                 Print version
 ```
