@@ -107,7 +107,7 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     }
 
     println!(
-        "File finder finished caching and finished at {} seconds.",
+        "File finder finished setup at {} seconds.",
         now.elapsed().as_secs()
     );
 
