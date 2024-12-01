@@ -1,9 +1,7 @@
-use std::{
-    collections::HashMap, fs::{self, OpenOptions}, path::PathBuf, sync::Arc, time::Instant
-};
+use std::{fs::{self}, path::PathBuf, sync::Arc, time::Instant};
 
 use crate::{
-    finder::{FileFinder, LengthFileFinder},
+    finder::{intern_paths, setup_finder_cache, FileFinder},
     solver::{run, PieceSolver, PieceSolverContext},
     torrent::{Pieces, Torrent}
 };
@@ -60,51 +58,10 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
         now.elapsed().as_secs()
     );
 
-    let length_file_finder = LengthFileFinder::new(&torrents, &options.scan_directories);
-    let mut finder = FileFinder::new(&torrents, &options.export_directory, length_file_finder);
+    let length_finder = setup_finder_cache(torrents, &options.export_directory, &options.scan_directories)?;
+    let length_finder = intern_paths(length_finder); 
 
-    // Validate we aren't corrupting data; or that we haven't missed any files due to pre-allocation not happening.
-    // Additionally, add any export files and treat them as part of the scan path, even if they are not explicitly defined there
-    // This will stop additional writes that do not need to occur. 
-    let mut updates: HashMap<usize, PathBuf> = HashMap::new();
-    
-    for (index, export_path) in finder.get_paths_in_index_order().iter().enumerate() {
-        let expected_file_length = finder.find_length(index);
-
-        let handle = OpenOptions::new().write(true).create(false).open(export_path);
-
-        if let Err(err) = handle {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                continue;
-            }
-
-            return Err(err);
-        }
-
-        let handle = handle.unwrap();
-        let actual_file_length = handle.metadata()?.len();
-
-        if actual_file_length > expected_file_length {
-            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "File exists on filesystem, but the length of the file is greater than the file length in the piece. Aborting to prevent accidental data loss."))?
-        } else if actual_file_length != expected_file_length {
-            // TODO: We might not want to preallocate to save space... but I don't think this a real problem to solve right now.
-            handle.set_len(expected_file_length)?;
-        }
-
-        updates.insert(index, export_path.to_path_buf());
-    }
-
-    for (index, path) in updates.into_iter() {
-        let found = finder
-            .find_searches(index)
-            .iter()
-            .find(|search| (*search).eq(&path)); 
-
-        if found.is_none() {
-            println!("Adding {:#?} as it is not defined in the search path.", path);
-            finder.search[index].insert(0, path);
-        }
-    }
+    let finder = FileFinder::new(&torrents, &options.export_directory, length_finder);
 
     println!(
         "File finder finished setup at {} seconds.",
