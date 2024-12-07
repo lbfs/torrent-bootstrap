@@ -6,6 +6,78 @@ use walkdir::WalkDir;
 use crate::{get_sha1_hexdigest, Torrent};
 use crate::File as TorrentFile;
 
+pub struct FileFinder {
+    search: Vec<Vec<Arc<PathBuf>>>,
+    lengths: Vec<u64>,
+    index_to_path: Vec<PathBuf>
+}
+
+impl FileFinder {
+    pub fn new(torrents: &[Torrent], export_directory: &Path, length_finder: HashMap<u64, Vec<Arc<PathBuf>>>) -> FileFinder {
+        let mut export_search: Vec<Vec<Arc<PathBuf>>> = Vec::new();
+        let mut index_to_path: Vec<PathBuf> = Vec::new();
+        let mut export_lengths: Vec<u64> = Vec::new();
+
+        for torrent in torrents {
+            if torrent.info.files.is_some() {
+                for file in torrent.info.files.as_ref().unwrap() {
+                    
+                    let full_target = format_path_multiple(file, torrent, export_directory);
+                    let partial_target = file.path.iter().collect::<PathBuf>();
+
+                    let searches = if let Some(entries) = length_finder.get(&file.length) {
+                        sort_by_target_absolute_path(&partial_target, &full_target, entries)
+                            .into_iter()
+                            .map(|value| value.clone())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    export_lengths.push(file.length);
+                    index_to_path.push(full_target);
+                    export_search.push(searches);
+
+                }
+            } else if torrent.info.length.is_some() {
+                let full_target = format_path_single(torrent, export_directory);
+                let partial_target = Path::new(&torrent.info.name);
+
+                let searches = if let Some(entries) = length_finder.get(&torrent.info.length.unwrap()) {
+                    sort_by_target_absolute_path(partial_target, &full_target, entries)
+                        .into_iter()
+                        .map(|value| value.clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                export_lengths.push(torrent.info.length.unwrap());
+                index_to_path.push(full_target);
+                export_search.push(searches);
+            }
+        }
+
+        FileFinder {
+            search: export_search,
+            lengths: export_lengths,
+            index_to_path: index_to_path
+        }
+    }
+
+    pub fn find_path_from_index(&self, index: usize) -> &PathBuf {
+        self.index_to_path.get(index).unwrap()
+    }
+
+    pub fn find_length(&self, index: usize) -> u64 {
+        *self.lengths.get(index).unwrap()
+    }
+
+    pub fn find_searches(&self, index: usize) -> &[Arc<PathBuf>] {
+        self.search.get(index).unwrap().as_ref()
+    }
+}
+
 fn generate_export_path_to_length(torrents: &[Torrent], export_directory: &Path) -> HashMap<PathBuf, u64> {
     let mut res = HashMap::new();
 
@@ -141,8 +213,8 @@ pub fn setup_finder_cache(torrents: &[Torrent], export_directory: &Path, scan_di
     Ok(cache)
 }
 
-pub fn intern_paths(finder: HashMap<u64, Vec<PathBuf>>) -> HashMap<u64, Box<[Arc<PathBuf>]>> {
-    let mut cache: HashMap<u64, Box<[Arc<PathBuf>]>> = HashMap::new();
+pub fn intern_paths(finder: HashMap<u64, Vec<PathBuf>>) -> HashMap<u64, Vec<Arc<PathBuf>>> {
+    let mut cache= HashMap::new();
 
     for (length, search) in finder {
         cache.insert(length, 
@@ -152,79 +224,7 @@ pub fn intern_paths(finder: HashMap<u64, Vec<PathBuf>>) -> HashMap<u64, Box<[Arc
     cache
 }
 
-pub struct FileFinder {
-    search: Vec<Vec<Arc<PathBuf>>>,
-    lengths: Vec<u64>,
-    index_to_path: Vec<PathBuf>
-}
-
-impl FileFinder {
-    pub fn new(torrents: &[Torrent], export_directory: &Path, length_finder: HashMap<u64, Box<[Arc<PathBuf>]>>) -> FileFinder {
-        let mut export_search: Vec<Vec<Arc<PathBuf>>> = Vec::new();
-        let mut index_to_path: Vec<PathBuf> = Vec::new();
-        let mut export_lengths: Vec<u64> = Vec::new();
-
-        for torrent in torrents {
-            if torrent.info.files.is_some() {
-                for file in torrent.info.files.as_ref().unwrap() {
-                    
-                    let full_target = format_path_multiple(file, torrent, export_directory);
-                    let partial_target = file.path.iter().collect::<PathBuf>();
-
-                    let searches = if let Some(entries) = length_finder.get(&file.length) {
-                        sort_by_target_absolute_path(&partial_target, &full_target, entries)
-                            .into_iter()
-                            .map(|value| value.clone())
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-
-                    export_lengths.push(file.length);
-                    index_to_path.push(full_target);
-                    export_search.push(searches);
-
-                }
-            } else if torrent.info.length.is_some() {
-                let full_target = format_path_single(torrent, export_directory);
-                let partial_target = Path::new(&torrent.info.name);
-
-                let searches = if let Some(entries) = length_finder.get(&torrent.info.length.unwrap()) {
-                    sort_by_target_absolute_path(partial_target, &full_target, entries)
-                        .into_iter()
-                        .map(|value| value.clone())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                export_lengths.push(torrent.info.length.unwrap());
-                index_to_path.push(full_target);
-                export_search.push(searches);
-            }
-        }
-
-        FileFinder {
-            search: export_search,
-            lengths: export_lengths,
-            index_to_path: index_to_path
-        }
-    }
-
-    pub fn find_path_from_index(&self, index: usize) -> &PathBuf {
-        self.index_to_path.get(index).unwrap()
-    }
-
-    pub fn find_length(&self, index: usize) -> u64 {
-        *self.lengths.get(index).unwrap()
-    }
-
-    pub fn find_searches(&self, index: usize) -> &[Arc<PathBuf>] {
-        self.search.get(index).unwrap().as_ref()
-    }
-}
-
-pub(crate) fn sort_by_target_absolute_path<'a>(partial_target: &Path, full_target: &Path, entries: &'a [Arc<PathBuf>]) -> Vec<Arc<PathBuf>> {
+fn sort_by_target_absolute_path(partial_target: &Path, full_target: &Path, entries: &[Arc<PathBuf>]) -> Vec<Arc<PathBuf>> {
     let mut entries: Vec<Arc<PathBuf>> = entries.iter().cloned().collect();
 
     entries.sort_by(|a, b| {
