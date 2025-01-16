@@ -21,7 +21,7 @@ pub fn scan<'a>(
 
         if entry.hash.as_slice().cmp(&hash).is_eq() {
             return Ok(Some(PieceMatchResult { 
-                bytes: bytes, 
+                bytes, 
                 source: vec![Some(search_path)]
             }));
         }

@@ -14,7 +14,7 @@ pub fn scan<'a>(
 
     let mut check = vec![0; loaded.len()];
 
-    let found = scan_internal(0, &mut check, &loaded, &entry);
+    let found = scan_internal(0, &mut check, &loaded, entry);
 
     Ok(if found { 
         let mut output_buffer = Vec::new();
@@ -32,10 +32,10 @@ pub fn scan<'a>(
     })
 }
 
-fn scan_internal<'a>(
+fn scan_internal(
     depth: usize,
     check: &mut [usize],
-    finder: &Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>,
+    finder: &Vec<Vec<(Option<&PathBuf>, Vec<u8>)>>,
     entry: &OrchestrationPiece
 ) -> bool {
     let entries = &finder[depth];

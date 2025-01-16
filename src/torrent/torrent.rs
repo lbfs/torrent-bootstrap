@@ -35,24 +35,24 @@ impl Torrent {
     pub fn from_bytes(bytes: &[u8]) -> Result<Torrent, TorrentError> {
         let token = match Parser::decode(bytes) {
             Ok(token) => token,
-            Err(err) => return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("{}", &err.message))),
+            Err(err) => Err(TorrentError::new(TorrentErrorKind::MalformedData, err.message.to_string()))?,
         };
 
         if let BencodeToken::Dictionary(root) = token {
-            return Torrent::evaluate_root(&root, bytes);
+            return Ok(Torrent::evaluate_root(&root, bytes))?;
         }
 
-        Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Unexpected token at root. Expected dictionary token")))
+        Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token at root. Expected dictionary token".to_string()))
     }
 
     fn evaluate_root(root: &BencodeDictionary, bytes: &[u8]) -> Result<Torrent, TorrentError> {
         // Required
         let announce = if let Ok(value) = root.find_string_value("announce") {
-            Some(value.as_utf8().map_err(|err| Torrent::convert_error(err))?.to_string())
+            Some(value.as_utf8().map_err(Torrent::convert_error)?.to_string())
         } else { None };
         
         let info = root.find_dictionary_value("info")
-            .map_err(|err| Torrent::convert_error(err))?;
+            .map_err(Torrent::convert_error)?;
 
         // Get Info Hash
         let info_hash = calculate_info_hash(info, bytes);
@@ -70,11 +70,11 @@ impl Torrent {
         } else { None };
 
         let comment = if let Ok(value) = root.find_string_value("comment") {
-            Some(value.as_utf8().map_err(|err| Torrent::convert_error(err))?.to_string())
+            Some(value.as_utf8().map_err(Torrent::convert_error)?.to_string())
         } else { None };
 
         let created_by = if let Ok(value) = root.find_string_value("created by") {
-            Some(value.as_utf8().map_err(|err| Torrent::convert_error(err))?.to_string())
+            Some(value.as_utf8().map_err(Torrent::convert_error)?.to_string())
         } else { None };
 
         Ok(Torrent {
@@ -90,13 +90,13 @@ impl Torrent {
 
     fn evaluate_info(info: &BencodeDictionary) -> Result<Info, TorrentError> {
         let name = info.find_string_value("name")
-            .map_err(|err| Torrent::convert_error(err))?
+            .map_err(Torrent::convert_error)?
             .as_utf8()
-            .map_err(|err| Torrent::convert_error(err))?
+            .map_err(Torrent::convert_error)?
             .to_string();
 
         let pieces = info.find_string_value("pieces")
-            .map_err(|err| Torrent::convert_error(err))?
+            .map_err(Torrent::convert_error)?
             .value
             .chunks(20)
             .map(|slice| slice.to_vec())
@@ -104,25 +104,25 @@ impl Torrent {
 
         let piece_length = u64::try_from({
                 info.find_integer_value("piece length")
-                    .map_err(|err| Torrent::convert_error(err))?
+                    .map_err(Torrent::convert_error)?
                     .value
-        }).map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, format!("Could not convert parsed integer value to unsigned integer value.")))?;
+        }).map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, "Could not convert parsed integer value to unsigned integer value.".to_string()))?;
 
         // One or the other is required, but not both or neither.
         let length = info.find_integer_value("length");
         let files = info.find_list_value("files");
         
         if length.is_ok() && files.is_ok() {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Info contains length and file properties. Only one must be present.")));
+            Err(TorrentError::new(TorrentErrorKind::MalformedData, "Info contains length and file properties. Only one must be present.".to_string()))?
         }
 
         if length.is_err() && files.is_err() {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Info does not contain length or file properties. One must be present.")));
+            Err(TorrentError::new(TorrentErrorKind::MalformedData, "Info does not contain length or file properties. One must be present.".to_string()))?
         }
 
         let length = if let Ok(length) = length {
             let length = u64::try_from(length.value)
-                .map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, format!("Could not convert parsed integer value to unsigned integer value.")))?;
+                .map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, "Could not convert parsed integer value to unsigned integer value.".to_string()))?;
             
             Some(length)
         } else { None };
@@ -130,8 +130,8 @@ impl Torrent {
         let files = if let Ok(files) = files {
             let files = Torrent::evaluate_files(files)?;
 
-            if files.len() == 0 {
-                return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Files has no entries. One file must be present.")));
+            if files.is_empty() {
+                Err(TorrentError::new(TorrentErrorKind::MalformedData, "Files has no entries. One file must be present.".to_string()))?
             }
 
             Some(files)
@@ -143,12 +143,12 @@ impl Torrent {
         } else { None };
 
         // Validate Piece Details
-        let total_length = if files.is_some() {
-            files.as_ref().unwrap().iter().map(|file| file.length).sum()
+        let total_length = if let Some(files) = &files {
+            files.iter().map(|file| file.length).sum()
         } else { length.unwrap() };
 
         if !Torrent::validate_piece_length(total_length, piece_length, &pieces) {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("Piece count does not fall with-in the expected piece boundary.")));
+            Err(TorrentError::new(TorrentErrorKind::MalformedData, "Piece count does not fall with-in the expected piece boundary.".to_string()))?
         }
 
         Ok(Info {
@@ -173,13 +173,13 @@ impl Torrent {
                         match tracker_entry {
                             BencodeToken::String(tracker) => {
                                 let result = tracker.as_utf8()
-                                    .map_err(|err| Torrent::convert_error(err))?
+                                    .map_err(Torrent::convert_error)?
                                     .to_string();
 
                                 tier_result.push(result);
                             },
                             _ => {
-                                return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in tracker tier list. Expected a string token.".to_string()));
+                                Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in tracker tier list. Expected a string token.".to_string()))?
                             }
                         }
                     }
@@ -187,7 +187,7 @@ impl Torrent {
                     announce_result.push(tier_result);
                 },
                 _ => {
-                    return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in tracker announce list. Expected a list token.".to_string()));
+                    Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in tracker announce list. Expected a list token.".to_string()))?
                 }
             }
         }
@@ -205,7 +205,7 @@ impl Torrent {
                     files_result.push(result);
                 },
                 _ => {
-                    return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in files list. Expected a dictionary token.".to_string()));
+                    Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in files list. Expected a dictionary token.".to_string()))?
                 }
             }
         }
@@ -216,12 +216,12 @@ impl Torrent {
     fn evaluate_file(file: &BencodeDictionary) -> Result<File, TorrentError> {
         let length = u64::try_from({
             file.find_integer_value("length")
-                .map_err(|err| Torrent::convert_error(err))?
+                .map_err(Torrent::convert_error)?
                 .value
-        }).map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, format!("Could not convert parsed integer value to unsigned integer value.")))?;
+        }).map_err(|_| TorrentError::new(TorrentErrorKind::MalformedData, "Could not convert parsed integer value to unsigned integer value.".to_string()))?;
 
         let paths = file.find_list_value("path")
-            .map_err(|err| Torrent::convert_error(err))?;
+            .map_err(Torrent::convert_error)?;
 
         let mut result_paths: Vec<String> = Vec::new();
 
@@ -229,19 +229,19 @@ impl Torrent {
             match path_entry {
                 BencodeToken::String(path) => {
                     let result = path.as_utf8()
-                        .map_err(|err| Torrent::convert_error(err))?
+                        .map_err(Torrent::convert_error)?
                         .to_string();
 
                     result_paths.push(result);
                 },
                 _ => {
-                    return Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in path list. Expected a string token.".to_string()));
+                    Err(TorrentError::new(TorrentErrorKind::MalformedData, "Unexpected token in path list. Expected a string token.".to_string()))?
                 }
             }
         }
 
-        if result_paths.len() == 0 {
-            return Err(TorrentError::new(TorrentErrorKind::MalformedData, format!("File cannot have an empty path.")));
+        if result_paths.is_empty() {
+            Err(TorrentError::new(TorrentErrorKind::MalformedData, "File cannot have an empty path.".to_string()))?
         }
 
         Ok(File {

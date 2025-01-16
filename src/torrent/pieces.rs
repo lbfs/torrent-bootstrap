@@ -39,7 +39,7 @@ impl Pieces {
         let files = torrent.info.files.as_ref().unwrap();
         let file_count = files.len();
         let mut file_index = 0;
-        let mut file_remaining_length = files.get(0)
+        let mut file_remaining_length = files.first()
             .expect("Files should always have atleast 1 entry")
             .length;
 
@@ -65,7 +65,7 @@ impl Pieces {
                     read_start_position: (current.length - file_remaining_length),
                     read_length: (file_remaining_length - current_remaining),
                     file_length: current.length,
-                    file_index: file_index,
+                    file_index,
                     is_padding_file: current.path.len() == 2 && current.path[0] == ".pad" && current.path[1].chars().all(char::is_numeric)
                 });
 
@@ -90,7 +90,7 @@ impl Pieces {
                 position: pieces.len(),
                 files: piece_files,
                 hash: hash.clone(),
-                length: length
+                length
             });
         }
 
@@ -114,8 +114,8 @@ impl Pieces {
             pieces.push(Piece {
                 position: pieces.len(),
                 files: vec![PieceFile {
-                    read_start_position: read_start_position,
-                    read_length: read_length,
+                    read_start_position,
+                    read_length,
                     file_length: torrent.info.length.unwrap(),
                     file_index: 0,
                     is_padding_file: false

@@ -64,15 +64,15 @@ fn format_remaining_bytes_error(position: usize) -> BencodeError {
 pub struct Parser;
 impl Parser {
     pub fn decode(bytes: &[u8]) -> Result<BencodeToken, BencodeError> {
-        let token = Parser::decode_any(&bytes, 0)?;
+        let token = Parser::decode_any(bytes, 0)?;
 
         let continuation_position = Parser::get_continuation_position(&token);
         match bytes.get(continuation_position) {
             Some(_) => {
-                return Err(format_remaining_bytes_error(continuation_position));
+                Err(format_remaining_bytes_error(continuation_position))
             },
             None => {
-                return Ok(token);
+                Ok(token)
             }
         }
     }
@@ -359,7 +359,7 @@ impl Parser {
                         b'0'..=b'9' => {
                             let token = Parser::decode_string(bytes, position)?;
 
-                            if keys.len() > 0 {
+                            if !keys.is_empty() {
                                 let last = keys.last().unwrap();
                                 match last.value.cmp(&token.value) {
                                     std::cmp::Ordering::Less => (),
@@ -407,8 +407,8 @@ impl Parser {
         }
 
         Ok(BencodeDictionary {
-            keys: keys,
-            values: values,
+            keys,
+            values,
             start_position,
             continuation_position: position
         })

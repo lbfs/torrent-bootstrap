@@ -1,14 +1,8 @@
-use std::{ops::DerefMut, path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::Mutex};
 
-use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, writer::{self}};
+use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, writer::FileWriter};
 
 use super::{multiple, single};
-
-pub trait Solver<T, K>
-{
-    fn solve(item: T, context: &K);
-    fn balance(entries: &mut [impl DerefMut<Target=Vec<T>>]);
-}
 
 pub struct PieceMatchResult<'a> {
     pub source: Vec<Option<&'a PathBuf>>,
@@ -23,25 +17,25 @@ pub struct PieceState {
 
 pub struct PieceSolverContext {
     pub finder: FileFinder,
+    pub writer: FileWriter,
     pub state: Mutex<PieceState>
 }
 
 impl PieceSolverContext {
-    pub fn new(finder: FileFinder, total_piece_count: usize) -> PieceSolverContext {
+    pub fn new(finder: FileFinder, writer: FileWriter, total_piece_count: usize) -> PieceSolverContext {
         PieceSolverContext {
             finder,
-            state: Mutex::new(PieceState { success_pieces: 0, failed_pieces: 0, total_piece_count: total_piece_count})
+            writer,
+            state: Mutex::new(PieceState { success_pieces: 0, failed_pieces: 0, total_piece_count})
         }
     }
 }
 
-pub struct PieceSolver;
-
-fn process(item: &OrchestrationPiece, context: &PieceSolverContext) -> std::io::Result<bool> {
+fn solve_internal(item: &OrchestrationPiece, context: &PieceSolverContext) -> std::io::Result<bool> {
     let mut is_rejected = false;
     for file in item.files.iter() {
         if file.is_padding_file { continue; }
-        if context.finder.find_searches(file.export_index).len() == 0 {
+        if context.finder.find_searches(file.export_index).is_empty() {
             is_rejected = true;
             break;
         }
@@ -50,113 +44,95 @@ fn process(item: &OrchestrationPiece, context: &PieceSolverContext) -> std::io::
     let found = if is_rejected {
         None
     } else if item.files.len() == 1 {
-        single::scan(&context.finder, &item)?
+        single::scan(&context.finder, item)?
     } else {
-        multiple::scan(&context.finder, &item)?
+        multiple::scan(&context.finder, item)?
     };
+    
+    if let Some(found) = &found {
+        context.writer.write(item, found, &context.finder)?;
+    }
 
-    let result = if let Some(found) = found {
-        let mut state = context.state.lock().unwrap();
+    let mut state = context.state.lock().unwrap();
 
-        writer::write(&item, &found, &context.finder)?;
+    state.success_pieces += found.is_some() as usize;
+    state.failed_pieces += found.is_none() as usize;
 
-        state.success_pieces += 1;
+    let availability = (state.success_pieces as f64 / state.total_piece_count as f64) * 100_f64;
+    let scanned = ((state.success_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100_f64;
 
-        let availability = (state.success_pieces as f64 / state.total_piece_count as f64) * 100 as f64;
-        let scanned = ((state.success_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100 as f64;
+    println!("{} of {} total pieces found - scanned: {:.02}% - availability: {:.02}%", 
+        state.success_pieces, 
+        state.total_piece_count,
+        scanned,
+        availability
+    );
 
-        println!("{} of {} total pieces found - scanned: {:.02}% - availability: {:.02}%", 
-            state.success_pieces, 
-            state.total_piece_count,
-            scanned,
-            availability
-        );
+    Ok(found.is_some())
+}
 
-        true
-    } else {
+pub fn solve(item: OrchestrationPiece, context: &PieceSolverContext) { 
+    let res = solve_internal(&item, context);
+    
+    if let Err(err) = res {
         let mut state = context.state.lock().unwrap();
 
         state.failed_pieces += 1;
 
-        let availability = (state.success_pieces as f64 / state.total_piece_count as f64) * 100 as f64;
-        let scanned = ((state.success_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100 as f64;
-
-        println!("{} of {} total pieces found - scanned: {:.02}% - availability: {:.02}%", 
-            state.success_pieces, 
-            state.total_piece_count,
-            scanned,
-            availability
-        );
-
-        false
-    };
-
-    Ok(result)
+        eprintln!("Unable to solve piece due to following error: {:#?}", err);
+    }
 }
 
-impl Solver<OrchestrationPiece, PieceSolverContext> for PieceSolver {
-    fn solve(item: OrchestrationPiece, context: &PieceSolverContext) { 
-        let res = process(&item, context);
-        
-        if let Err(err) = res {
-            let mut state = context.state.lock().unwrap();
+pub fn balance(thread_entries: &mut [impl DerefMut<Target=Vec<OrchestrationPiece>>]) {
+    // Take work out of threads
+    let capacity = thread_entries
+        .iter()
+        .map(|value| value.len())
+        .sum::<usize>();
 
-            state.failed_pieces += 1;
+    let mut entries = Vec::with_capacity(capacity);
+    for entry in thread_entries.iter_mut() {
+        entries.extend(entry.drain(..));
+    }
 
-            eprintln!("Unable to solve piece due to following error: {:#?}", err);
+    // Balance the work by | Multiples -> Most Complex to Least Complex | | Singles -> 1,2,3,4,5,1,2,3,4,5 | 
+    let mut singles: HashMap<usize, Vec<OrchestrationPiece>> = HashMap::new();
+    let mut result = Vec::new();
+
+    for entry in entries.into_iter() {
+        if entry.files.len() == 1 {
+            let items: &mut _ = singles.entry(entry.files[0].export_index).or_default();
+            items.push(entry);
+        } else {
+            result.push(entry);
         }
     }
-    
-    fn balance(entries: &mut [impl DerefMut<Target=Vec<OrchestrationPiece>>]) {
-        // Take items out of each thread
-        let capacity = entries
-            .iter()
-            .map(|value| value.len())
-            .sum::<usize>();
 
-        let mut pieces_to_place = Vec::with_capacity(capacity);
+    result.sort_by(|left, right| left.files.len().cmp(&right.files.len()));
+    result.reverse();
 
-        for entry in entries.iter_mut() {
-            pieces_to_place.extend(entry.drain(..));
-        }
+    let mut remaining = true;
+    while remaining {
+        let mut found = false;
 
-        // Sort pieces from least complex to most complex by file count, and within the file count sort by file path
-        pieces_to_place.sort_by(|left, right| {
-            let left_files = &left.files;
-            let right_files = &right.files;
-
-            let same_number_of_files = left_files.len().cmp(&right_files.len());
-            if same_number_of_files.is_eq() { 
-                left_files.first().unwrap().export_index.cmp(&right_files.first().unwrap().export_index)
-            } else {
-                same_number_of_files
-            }
-        });
-
-        // Place items onto worker queue
-        while pieces_to_place.len() > 0 {
-            let last = pieces_to_place.last().unwrap();
-            let last_file_name = last.files.first().unwrap().export_index;
-
-            let mut thread_id = usize::MAX;
-            let mut thread_size = usize::MAX;
-    
-            // Find thread id with lowest size
-            for (entry_index, entry) in entries.iter().enumerate() {
-                if entry.len() < thread_size {
-                    thread_id = entry_index;
-                    thread_size = entry.len();
-                }
-            }
-
-            while pieces_to_place.len() > 0 {
-                let next_file_name = &pieces_to_place.last().unwrap()
-                    .files.first().unwrap().export_index;
-
-                if !last_file_name.cmp(next_file_name).is_eq() { break; }
-
-                entries[thread_id].push(pieces_to_place.pop().unwrap());
+        for (_, value) in singles.iter_mut() {
+            if !value.is_empty() {
+                result.push(value.pop().unwrap());
+                found = true;
             }
         }
+
+        remaining = found;
+    }
+
+    result.reverse();
+
+    // Place them back on the threads evenly as possible
+    let mut thread_index = 0;
+    while let Some(element) = result.pop() {
+        thread_entries[thread_index].push(element);
+
+        thread_index += 1;
+        thread_index *= (thread_index < thread_entries.len()) as usize;
     }
 }

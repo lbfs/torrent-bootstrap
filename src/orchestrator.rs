@@ -2,8 +2,8 @@ use std::{fs::{self}, path::PathBuf, sync::Arc, time::Instant};
 
 use crate::{
     finder::{intern_paths, setup_finder_cache, FileFinder},
-    solver::{run, PieceSolver, PieceSolverContext},
-    torrent::{Pieces, Torrent}
+    solver::{run, PieceSolverContext},
+    torrent::{Pieces, Torrent}, writer::FileWriter
 };
 
 #[derive(Debug)]
@@ -61,21 +61,24 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     let length_finder = setup_finder_cache(torrents, &options.export_directory, &options.scan_directories)?;
     let length_finder = intern_paths(length_finder); 
 
-    let finder = FileFinder::new(&torrents, &options.export_directory, length_finder);
+    let finder = FileFinder::new(torrents, &options.export_directory, length_finder);
 
     println!(
         "File finder finished setup at {} seconds.",
         now.elapsed().as_secs()
     );
 
+    // Setup Writer
+    let writer = FileWriter::new(&finder);
+
     // Setup work
-    let work = convert_pieces_to_work(&torrents);
+    let work = convert_pieces_to_work(torrents);
 
     // Start processing the work
     println!("Solver started at {} seconds.", now.elapsed().as_secs());
 
-    let context = Arc::new(PieceSolverContext::new(finder, work.len()));
-    run::<_, _, PieceSolver>(work, context, options.threads);
+    let context = Arc::new(PieceSolverContext::new(finder, writer, work.len()));
+    run(work, context, options.threads);
 
     println!("Solver finished at {} seconds.", now.elapsed().as_secs());
 
@@ -130,7 +133,7 @@ fn validate_path(path: &PathBuf) -> Result<(), std::io::Error> {
         ))?
     }
 
-    let metadata = fs::metadata(&path)?;
+    let metadata = fs::metadata(path)?;
 
     if !metadata.is_dir() {
         Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{:#?} is not a directory.", path)))?

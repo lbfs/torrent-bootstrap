@@ -9,7 +9,7 @@ pub struct BencodeString {
 }
 
 impl BencodeString {
-    pub fn as_utf8<'a>(&'a self) -> Result<&'a str, BencodeError> {
+    pub fn as_utf8(&self) -> Result<&str, BencodeError> {
         let value = from_utf8(&self.value)
             .map_err(|err| BencodeError::new(BencodeErrorKind::MalformedData, err.to_string()));
 

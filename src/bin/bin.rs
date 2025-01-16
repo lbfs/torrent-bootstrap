@@ -42,7 +42,7 @@ fn run() -> std::io::Result<()> {
 
     // Start it up!
     let options = OrchestratorOptions {
-        torrents: torrents,
+        torrents,
         scan_directories: args.scan.iter().map(|value| Path::new(value).to_path_buf()).collect(),
         export_directory: Path::new(&args.export).to_path_buf(),
         threads: args.threads

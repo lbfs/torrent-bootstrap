@@ -9,7 +9,7 @@ use crate::File as TorrentFile;
 pub struct FileFinder {
     search: Vec<Vec<Arc<PathBuf>>>,
     lengths: Vec<u64>,
-    index_to_path: Vec<PathBuf>
+    pub index_to_path: Vec<PathBuf>
 }
 
 impl FileFinder {
@@ -28,7 +28,6 @@ impl FileFinder {
                     let searches = if let Some(entries) = length_finder.get(&file.length) {
                         sort_by_target_absolute_path(&partial_target, &full_target, entries)
                             .into_iter()
-                            .map(|value| value.clone())
                             .collect()
                     } else {
                         Vec::new()
@@ -46,7 +45,6 @@ impl FileFinder {
                 let searches = if let Some(entries) = length_finder.get(&torrent.info.length.unwrap()) {
                     sort_by_target_absolute_path(partial_target, &full_target, entries)
                         .into_iter()
-                        .map(|value| value.clone())
                         .collect()
                 } else {
                     Vec::new()
@@ -61,7 +59,7 @@ impl FileFinder {
         FileFinder {
             search: export_search,
             lengths: export_lengths,
-            index_to_path: index_to_path
+            index_to_path
         }
     }
 
@@ -218,14 +216,14 @@ pub fn intern_paths(finder: HashMap<u64, Vec<PathBuf>>) -> HashMap<u64, Vec<Arc<
 
     for (length, search) in finder {
         cache.insert(length, 
-            search.into_iter().map(|value| Arc::new(value)).collect());
+            search.into_iter().map(Arc::new).collect());
     }
 
     cache
 }
 
 fn sort_by_target_absolute_path(partial_target: &Path, full_target: &Path, entries: &[Arc<PathBuf>]) -> Vec<Arc<PathBuf>> {
-    let mut entries: Vec<Arc<PathBuf>> = entries.iter().cloned().collect();
+    let mut entries: Vec<Arc<PathBuf>> = entries.to_vec();
 
     entries.sort_by(|a, b| {
         let left = find_file_similarity(a, partial_target, full_target);
@@ -238,9 +236,9 @@ fn sort_by_target_absolute_path(partial_target: &Path, full_target: &Path, entri
 }
 
 fn find_file_similarity(entry: &Path, partial_target: &Path, full_target: &Path) -> usize {
-    if entry.ends_with(&full_target) { 
+    if entry.ends_with(full_target) { 
         0
-    } else if entry.ends_with(&partial_target) {
+    } else if entry.ends_with(partial_target) {
         1
     } else if entry.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
         2

@@ -1,19 +1,16 @@
 use std::{sync::{Arc, Mutex, MutexGuard}, thread::{self, JoinHandle}};
 
-use super::Solver;
+use crate::orchestrator::OrchestrationPiece;
+
+use super::{balance, solve, PieceSolverContext};
 
 struct ExecutionState<T> {
     active_threads: usize,
     locks: Vec<Arc<Mutex<Vec<T>>>>
 }
 
-pub fn run<T, K, V>(items: Vec<T>, context: Arc<K>, thread_count: usize)
-where
-    T: Send + Sync + 'static,
-    K: Send + Sync + 'static,
-    V: Solver<T, K>
-{
-    if items.len() == 0 {
+pub fn run(items: Vec<OrchestrationPiece>, context: Arc<PieceSolverContext>, thread_count: usize) {
+    if items.is_empty() {
         return;
     }
 
@@ -26,7 +23,7 @@ where
         entries.push(Vec::new())
     }
 
-    V::balance(&mut (entries.iter_mut().collect::<Vec<_>>()));
+    balance(&mut (entries.iter_mut().collect::<Vec<_>>()));
 
     // Setup state and start
     let locks: Vec<_> = entries
@@ -46,7 +43,7 @@ where
         let context = context.clone();
 
         let handle = thread::spawn(move || {
-            run_internal::<T, K, V>(context, thread_id, local, execution_state);
+            run_internal(context, thread_id, local, execution_state);
         });
 
         handles.push(handle);
@@ -58,17 +55,7 @@ where
     }
 }
 
-fn run_internal<T, K, V>(
-    context: Arc<K>, 
-    thread_id: usize, 
-    local: Arc<Mutex<Vec<T>>>, 
-    execution_state: Arc<Mutex<ExecutionState<T>>>
-)
-where
-    T: Send + Sync + 'static,
-    K: Send + Sync + 'static,
-    V: Solver<T, K>
-{
+fn run_internal(context: Arc<PieceSolverContext>, thread_id: usize, local: Arc<Mutex<Vec<OrchestrationPiece>>>, execution_state: Arc<Mutex<ExecutionState<OrchestrationPiece>>>) {
     'outer: loop {
         let found = {
             let guard = local.try_lock();
@@ -82,7 +69,7 @@ where
 
         match found {
             Some(work) => {
-                V::solve(work, &context);
+                solve(work, &context);
             },
             None => {
                 let mut state = execution_state.lock().unwrap();
@@ -100,7 +87,7 @@ where
                 }
 
                 // Store all the thread guards in the exact order they are in based on thread id
-                let mut thread_guards: Vec<MutexGuard<Vec<T>>> = Vec::with_capacity(state.active_threads);
+                let mut thread_guards: Vec<MutexGuard<Vec<_>>> = Vec::with_capacity(state.active_threads);
                 for thread_index in 0..thread_id {
                     let guard = state.locks[thread_index]
                         .lock()
@@ -120,7 +107,7 @@ where
                 }
 
                 // Balance the work across all the active threads
-                V::balance(&mut thread_guards[0..state.active_threads]);
+                balance(&mut thread_guards[0..state.active_threads]);
 
                 // Remove any threads off the tail from processing if they have no work.
                 let mut deactivated_threads = 0;
@@ -135,7 +122,7 @@ where
                 }
 
                 drop(thread_guards);
-                state.active_threads = state.active_threads - deactivated_threads;
+                state.active_threads -= deactivated_threads;
             }
         }
     }
