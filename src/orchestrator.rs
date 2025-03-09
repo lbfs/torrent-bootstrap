@@ -21,7 +21,6 @@ pub struct OrchestrationPieceFile {
     // Filled out when generating pieces
     pub read_length: u64,
     pub read_start_position: u64,
-    pub is_padding_file: bool,
 
     // Filled out by orchestration
     pub metadata: Arc<TorrentMetadataEntry>,
@@ -133,7 +132,6 @@ fn convert_pieces_to_work(
                 orchestration_piece_files.push(OrchestrationPieceFile {
                     read_length: file.read_length,
                     read_start_position: file.read_start_position,
-                    is_padding_file: file.is_padding_file,
                     metadata: lookup.get(&torrent.info_hash).unwrap().get(&file.file_index).unwrap().clone()
                 });
             }

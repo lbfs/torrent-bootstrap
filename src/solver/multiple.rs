@@ -70,7 +70,7 @@ fn preload<'a>(entry: &'a OrchestrationPiece) -> Result<Vec<Vec<(Option<&'a Path
     for file in entry.files.iter() {
         let mut results: Vec<(Option<&'a PathBuf>, Vec<u8>)> = Vec::new();
 
-        if file.is_padding_file { 
+        if file.metadata.is_padding_file { 
             results.push((None, vec![0; file.read_length as usize]));
         } else {
             let search_paths = file.metadata.searches.as_ref().unwrap();

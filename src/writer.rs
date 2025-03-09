@@ -17,7 +17,7 @@ impl FileWriter {
         let mut start_position = 0;
     
         for (file, source_path) in item.files.iter().zip(&result.source) {
-            if file.is_padding_file { continue; }
+            if file.metadata.is_padding_file { continue; }
     
             let file_length = file.metadata.file_length;
             let file_export = &file.metadata.full_target;

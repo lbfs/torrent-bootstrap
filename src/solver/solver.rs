@@ -32,7 +32,7 @@ impl PieceSolverContext {
 fn solve_internal(item: &OrchestrationPiece, context: &PieceSolverContext) -> std::io::Result<bool> {
     let mut is_rejected = false;
     for file in item.files.iter() {
-        if file.is_padding_file { continue; }
+        if file.metadata.is_padding_file { continue; }
         if file.metadata.searches.is_none() {
             is_rejected = true;
             break;
@@ -42,7 +42,7 @@ fn solve_internal(item: &OrchestrationPiece, context: &PieceSolverContext) -> st
     let found = if is_rejected {
         None
     } else if item.files.len() == 1 {
-        single::scan( item)?
+        single::scan(item)?
     } else {
         multiple::scan(item)?
     };

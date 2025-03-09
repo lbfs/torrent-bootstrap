@@ -191,6 +191,7 @@ pub fn fix_export_file_lengths(metadata: &[TorrentMetadataEntry]) -> Result<(), 
         let handle = handle.unwrap();
         let actual_length = handle.metadata()?.len();
 
+        // We should error out as soon as possible, before we start modifying user files, because something is clearly wrong.
         if actual_length > expected_length {
             Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, 
                 format!("File {:#?} exists on filesystem, but the length of the file is greater than the file length in the piece. Aborting to prevent accidental data loss.", &entry.full_target)))?
@@ -204,8 +205,17 @@ pub fn fix_export_file_lengths(metadata: &[TorrentMetadataEntry]) -> Result<(), 
             .create_new(false)
             .read(true)
             .truncate(false)
-            .open(&entry.full_target)?;
+            .open(&entry.full_target);
 
+        if let Err(err) = handle {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                continue;
+            }
+    
+            return Err(err);
+        }
+
+        let handle = handle.unwrap();
         let expected_length = entry.file_length;
         let actual_length = handle.metadata()?.len();
 
@@ -240,6 +250,7 @@ pub struct TorrentMetadataEntry {
     pub file_length: u64,
     pub full_target: PathBuf,
     partial_target: PathBuf,
+    pub is_padding_file: bool,
     pub searches: Option<Box<[Arc<PathBuf>]>>
 } 
 
@@ -252,6 +263,7 @@ pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Pat
             for (file_index, file) in torrent.info.files.as_ref().unwrap().iter().enumerate() {
                 let full_target = format_path_multiple(file, torrent, export_directory);
                 let partial_target = file.path.iter().collect::<PathBuf>();
+                let is_padding_file = file.path.len() == 2 && file.path[0] == ".pad" && file.path[1].chars().all(char::is_numeric);
 
                 let meta: TorrentMetadataEntry = TorrentMetadataEntry { 
                     id: internal_id_counter, 
@@ -260,6 +272,7 @@ pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Pat
                     file_length: file.length,
                     full_target,
                     partial_target,
+                    is_padding_file,
                     searches: None
                 };
 
@@ -277,6 +290,7 @@ pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Pat
                 file_length: torrent.info.length.unwrap(),
                 full_target,
                 partial_target,
+                is_padding_file: false,
                 searches: None
             };
 
