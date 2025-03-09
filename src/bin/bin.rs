@@ -18,13 +18,13 @@ struct Cli {
     #[arg(long, required = true)]
     export: PathBuf,
 
-    /// Number of read threads for hashing.
-    #[arg(long, required = false, default_value_t = 1)]
-    threads: usize,
-
     /// If the export file on disk is smaller than the one in the torrent, then resize to match the torrent. This helps with accuracy during the scanning process.
     #[arg(long, required = false, default_value_t = false)]
     resize_export_files: bool,
+
+    /// Number of read threads for hashing.
+    #[arg(long, required = false, default_value_t = 1)]
+    threads: usize,
 }
 
 fn run() -> std::io::Result<()> {

@@ -49,7 +49,6 @@ fn scan_internal(
                 let index = *index;
                 let value = &finder[depth][index].1;
                 hasher.update(value);
-
             }
             
             entry.hash.as_slice().cmp(&hasher.finalize_reset()).is_eq()

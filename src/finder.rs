@@ -207,7 +207,12 @@ pub fn fix_export_file_lengths(metadata: &[TorrentMetadataEntry]) -> Result<(), 
             .open(&entry.full_target)?;
 
         let expected_length = entry.file_length;
-        handle.set_len(expected_length)?;
+        let actual_length = handle.metadata()?.len();
+
+        if actual_length < expected_length {
+            eprintln!("Updating {:#?} from length {} to length {}", entry.full_target, actual_length, expected_length);
+            handle.set_len(expected_length)?;
+        }
     }
 
     Ok(())
@@ -295,10 +300,17 @@ pub fn populate_metadata_searches(metadata: &mut [TorrentMetadataEntry], file_ca
             let mut found: Vec<_> = nodes.keys().map(|value| value.to_path_buf()).collect();
 
             sort_by_target_absolute_path(&partial_target, &full_target, &mut found);
-            let entries = prune_duplicate_hard_links(file_cache, length, found);
+
+            let initial_size = found.len();
+            let deduplicated_entries = prune_duplicate_hard_links(file_cache, length, found);
+            let deduplicated_size = deduplicated_entries.len();
+
+            if deduplicated_size != initial_size {
+                eprintln!("Removed {} hard-links from {:#?}", initial_size - deduplicated_size, &full_target);
+            }
 
             // Store de-duplicated file paths
-            let search_references = entries
+            let search_references = deduplicated_entries
                 .into_iter()
                 .map(|path| add_path_or_get_if_exists(&mut path_to_reference_counted, path))
                 .collect::<Box<_>>();

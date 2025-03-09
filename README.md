@@ -14,10 +14,11 @@ Usage: torrent_bootstrap [OPTIONS] --torrents <TORRENTS>... --scan <SCAN>... --e
 Options:
       --torrents <TORRENTS>...  Path that should be used to load a torrent
       --scan <SCAN>...          Paths that should be scanned for matching files
-      --export <EXPORT>         Path where the exported file should be updated or stored.  
-                                Any matching files under this export path are automatically 
-                                added to the scan path
+      --export <EXPORT>         Path where the exported file should be updated or stored. 
+                                Any matching files under this export path are automatically added to the scan path
       --threads <THREADS>       Number of read threads for hashing [default: 1]
+      --resize-export-files     If the export file on disk is smaller than the one in the torrent, 
+                                then resize to match the torrent. This helps with accuracy during the scanning process
   -h, --help                    Print help
   -V, --version                 Print version
 ```
