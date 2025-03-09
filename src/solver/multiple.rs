@@ -2,15 +2,14 @@ use std::path::PathBuf;
 
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, FileFinder}, orchestrator::OrchestrationPiece};
+use crate::{finder::read_bytes, orchestrator::OrchestrationPiece};
 
 use super::PieceMatchResult;
 
 pub fn scan<'a>(
-    finder: &'a FileFinder,
-    entry: &OrchestrationPiece,
+    entry: &'a OrchestrationPiece,
 ) -> Result<Option<PieceMatchResult<'a>>, std::io::Error> {
-    let loaded = preload(entry, finder)?;
+    let loaded = preload(entry)?;
 
     let mut check = vec![0; loaded.len()];
 
@@ -66,7 +65,7 @@ fn scan_internal(
     false
 }
 
-fn preload<'a>(entry: &OrchestrationPiece, finder: &'a FileFinder) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
+fn preload<'a>(entry: &'a OrchestrationPiece) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
     let mut loaded = Vec::with_capacity(entry.files.len());
 
     for file in entry.files.iter() {
@@ -75,7 +74,7 @@ fn preload<'a>(entry: &OrchestrationPiece, finder: &'a FileFinder) -> Result<Vec
         if file.is_padding_file { 
             results.push((None, vec![0; file.read_length as usize]));
         } else {
-            let search_paths = finder.find_searches_unsafe(file.metadata_id);
+            let search_paths = file.metadata.searches.as_ref().unwrap();
     
             // De-duplicate identical files if the file has already been seen.
             'inner: for search_path in search_paths {

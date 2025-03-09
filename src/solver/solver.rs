@@ -1,6 +1,6 @@
 use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::Mutex};
 
-use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, writer::FileWriter};
+use crate::{orchestrator::OrchestrationPiece, writer::FileWriter};
 
 use super::{multiple, single};
 
@@ -16,15 +16,13 @@ pub struct PieceState {
 }
 
 pub struct PieceSolverContext {
-    pub finder: FileFinder,
     pub writer: FileWriter,
     pub state: Mutex<PieceState>
 }
 
 impl PieceSolverContext {
-    pub fn new(finder: FileFinder, writer: FileWriter, total_piece_count: usize) -> PieceSolverContext {
+    pub fn new(writer: FileWriter, total_piece_count: usize) -> PieceSolverContext {
         PieceSolverContext {
-            finder,
             writer,
             state: Mutex::new(PieceState { success_pieces: 0, failed_pieces: 0, total_piece_count})
         }
@@ -35,7 +33,7 @@ fn solve_internal(item: &OrchestrationPiece, context: &PieceSolverContext) -> st
     let mut is_rejected = false;
     for file in item.files.iter() {
         if file.is_padding_file { continue; }
-        if context.finder.find_searches(file.metadata_id).is_none() {
+        if file.metadata.searches.is_none() {
             is_rejected = true;
             break;
         }
@@ -44,13 +42,13 @@ fn solve_internal(item: &OrchestrationPiece, context: &PieceSolverContext) -> st
     let found = if is_rejected {
         None
     } else if item.files.len() == 1 {
-        single::scan(&context.finder, item)?
+        single::scan( item)?
     } else {
-        multiple::scan(&context.finder, item)?
+        multiple::scan(item)?
     };
     
     if let Some(found) = &found {
-        context.writer.write(item, found, &context.finder)?;
+        context.writer.write(item, found)?;
     }
 
     let mut state = context.state.lock().unwrap();
@@ -101,7 +99,7 @@ pub fn balance(thread_entries: &mut [impl DerefMut<Target=Vec<OrchestrationPiece
 
     for entry in entries.into_iter() {
         if entry.files.len() == 1 {
-            let items: &mut _ = singles.entry(entry.files[0].metadata_id).or_default();
+            let items: &mut _ = singles.entry(entry.files[0].metadata.id).or_default();
             items.push(entry);
         } else {
             result.push(entry);

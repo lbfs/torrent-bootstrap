@@ -1,16 +1,15 @@
 use sha1::{Digest, Sha1};
 
-use crate::{finder::{read_bytes, FileFinder}, orchestrator::OrchestrationPiece};
+use crate::{finder::read_bytes, orchestrator::OrchestrationPiece};
 
 use super::PieceMatchResult;
 
 pub fn scan<'a>(
-    finder: &'a FileFinder,
-    entry: &OrchestrationPiece,
+    entry: &'a OrchestrationPiece,
 ) -> Result<Option<PieceMatchResult<'a>>, std::io::Error> {
 
     let first_file = entry.files.first().unwrap();
-    let search_paths = finder.find_searches_unsafe(first_file.metadata_id);
+    let search_paths = first_file.metadata.searches.as_ref().unwrap();
 
     for search_path in search_paths {
         let bytes = read_bytes(search_path, first_file.read_length, first_file.read_start_position)?;

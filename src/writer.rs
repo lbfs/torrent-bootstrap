@@ -1,6 +1,6 @@
 use std::{fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, sync::Mutex};
 
-use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, solver::PieceMatchResult};
+use crate::{orchestrator::OrchestrationPiece, solver::PieceMatchResult};
 
 pub struct FileWriter {
     lock: Mutex<()>
@@ -13,14 +13,14 @@ impl FileWriter {
         }
     }
 
-    pub fn write(&self, item: &OrchestrationPiece, result: &PieceMatchResult, finder: &FileFinder) -> Result<(), std::io::Error> {
+    pub fn write(&self, item: &OrchestrationPiece, result: &PieceMatchResult) -> Result<(), std::io::Error> {
         let mut start_position = 0;
     
         for (file, source_path) in item.files.iter().zip(&result.source) {
             if file.is_padding_file { continue; }
     
-            let file_length = finder.find_length(file.metadata_id);
-            let file_export = finder.find_full_target(file.metadata_id);
+            let file_length = file.metadata.file_length;
+            let file_export = &file.metadata.full_target;
     
             if source_path.is_some() && file_export.eq(source_path.unwrap()) { continue; }
 

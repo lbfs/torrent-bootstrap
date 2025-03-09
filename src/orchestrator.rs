@@ -7,8 +7,9 @@ use std::{
 
 use crate::{
     finder::{
-        add_export_paths, build_torrent_metadata_table, fix_export_file_lengths,
-        get_unique_file_lengths, FileCache, FileFinder,
+        add_export_paths, build_info_hash_file_index_lookup_table, build_torrent_metadata_table,
+        fix_export_file_lengths, get_unique_file_lengths, populate_metadata_searches, FileCache,
+        TorrentMetadataEntry,
     },
     solver::{run, PieceSolverContext},
     torrent::{Pieces, Torrent},
@@ -23,7 +24,7 @@ pub struct OrchestrationPieceFile {
     pub is_padding_file: bool,
 
     // Filled out by orchestration
-    pub metadata_id: usize,
+    pub metadata: Arc<TorrentMetadataEntry>,
 }
 
 #[derive(Debug)]
@@ -68,7 +69,7 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
         now.elapsed().as_secs()
     );
 
-    let finder = setup_finder(torrents, &options.export_directory, &options.scan_directories, options.resize_export_files)?;
+    let metadata = setup_metadata(torrents, &options.export_directory, &options.scan_directories, options.resize_export_files)?;
 
     println!(
         "File finder finished setup at {} seconds.",
@@ -79,12 +80,12 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     let writer = FileWriter::new();
 
     // Setup work
-    let work = convert_pieces_to_work(torrents, &finder);
+    let work = convert_pieces_to_work(torrents, metadata);
 
     // Start processing the work
     println!("Solver started at {} seconds.", now.elapsed().as_secs());
 
-    let context = Arc::new(PieceSolverContext::new(finder, writer, work.len()));
+    let context = Arc::new(PieceSolverContext::new(writer, work.len()));
     run(work, context, options.threads);
 
     println!("Solver finished at {} seconds.", now.elapsed().as_secs());
@@ -92,10 +93,10 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-fn setup_finder(torrents: &[Torrent], export_directory: &PathBuf, scan_directories: &[PathBuf], resize_export_files: bool) -> Result<FileFinder, std::io::Error> {
+fn setup_metadata(torrents: &[Torrent], export_directory: &PathBuf, scan_directories: &[PathBuf], resize_export_files: bool) -> Result<Vec<TorrentMetadataEntry>, std::io::Error> {
     let mut file_cache = FileCache::new();
 
-    let metadata = build_torrent_metadata_table(torrents, export_directory);
+    let mut metadata = build_torrent_metadata_table(torrents, export_directory);
 
     if resize_export_files {
         fix_export_file_lengths(&metadata)?;
@@ -109,13 +110,17 @@ fn setup_finder(torrents: &[Torrent], export_directory: &PathBuf, scan_directori
         file_cache.add_by_directory_and_length(scan_directory, &unique_lengths);
     }
 
-    Ok(FileFinder::new(&metadata, &file_cache))
+    populate_metadata_searches(&mut metadata, &file_cache);
+
+    Ok(metadata)
 }
 
 fn convert_pieces_to_work(
     torrents: &[Torrent],
-    finder: &FileFinder
+    metadata: Vec<TorrentMetadataEntry>
 ) -> Vec<OrchestrationPiece> {
+    let lookup = build_info_hash_file_index_lookup_table(metadata);
+
     let mut results = Vec::new();
 
     for torrent in torrents {
@@ -129,7 +134,7 @@ fn convert_pieces_to_work(
                     read_length: file.read_length,
                     read_start_position: file.read_start_position,
                     is_padding_file: file.is_padding_file,
-                    metadata_id: finder.find_id_from_info_hash_file_index(&torrent.info_hash, file.file_index)
+                    metadata: lookup.get(&torrent.info_hash).unwrap().get(&file.file_index).unwrap().clone()
                 });
             }
 
