@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use sha1::{Digest, Sha1};
 
@@ -6,35 +6,39 @@ use crate::{finder::read_bytes, orchestrator::OrchestrationPiece};
 
 use super::PieceMatchResult;
 
-pub fn scan<'a>(
-    entry: &'a OrchestrationPiece,
-) -> Result<Option<PieceMatchResult<'a>>, std::io::Error> {
+pub fn scan(
+    entry: &OrchestrationPiece,
+    result: &mut PieceMatchResult
+) -> Result<bool, std::io::Error> {
     let loaded = preload(entry)?;
 
     let mut check = vec![0; loaded.len()];
 
     let found = scan_internal(0, &mut check, &loaded, entry);
 
-    Ok(if found { 
-        let mut output_buffer = Vec::new();
-        let mut output_paths = Vec::new();
+    if found { 
+        let output_buffer = &mut result.bytes;
+        let output_paths = &mut result.source;
+
+        output_buffer.clear();
+        output_paths.clear();
 
         for (depth, index) in check.into_iter().enumerate() {
             let (path, value) = &loaded[depth][index];
             output_buffer.extend(value);
-            output_paths.push(*path);
+            output_paths.push(path.clone());
         }
 
-        Some(PieceMatchResult { bytes: output_buffer, source: output_paths })
-     } else { 
-        None 
-    })
+        return Ok(true)
+    }
+    
+    Ok(false)
 }
 
 fn scan_internal(
     depth: usize,
     check: &mut [usize],
-    finder: &Vec<Vec<(Option<&PathBuf>, Vec<u8>)>>,
+    finder: &Vec<Vec<(Option<Arc<PathBuf>>, Vec<u8>)>>,
     entry: &OrchestrationPiece
 ) -> bool {
     let entries = &finder[depth];
@@ -64,11 +68,11 @@ fn scan_internal(
     false
 }
 
-fn preload<'a>(entry: &'a OrchestrationPiece) -> Result<Vec<Vec<(Option<&'a PathBuf>, Vec<u8>)>>, std::io::Error> {
+fn preload(entry: &OrchestrationPiece) -> Result<Vec<Vec<(Option<Arc<PathBuf>>, Vec<u8>)>>, std::io::Error> {
     let mut loaded = Vec::with_capacity(entry.files.len());
 
     for file in entry.files.iter() {
-        let mut results: Vec<(Option<&'a PathBuf>, Vec<u8>)> = Vec::new();
+        let mut results: Vec<(Option<Arc<PathBuf>>, Vec<u8>)> = Vec::new();
 
         if file.metadata.is_padding_file { 
             results.push((None, vec![0; file.read_length as usize]));
@@ -85,7 +89,7 @@ fn preload<'a>(entry: &'a OrchestrationPiece) -> Result<Vec<Vec<(Option<&'a Path
                     }
                 }
     
-                results.push((Some(search_path), value));
+                results.push((Some(search_path.clone()), value));
             }
         }
 

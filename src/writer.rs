@@ -22,7 +22,7 @@ impl FileWriter {
             let file_length = file.metadata.file_length;
             let file_export = &file.metadata.full_target;
     
-            if source_path.is_some() && file_export.eq(source_path.unwrap()) { continue; }
+            if source_path.is_some() && file_export.eq(source_path.as_ref().unwrap().as_ref()) { continue; }
 
             let _file_write_guard = self.lock.lock().expect("Should always lock.");
 

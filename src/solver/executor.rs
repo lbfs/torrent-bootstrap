@@ -2,7 +2,7 @@ use std::{sync::{Arc, Mutex, MutexGuard}, thread::{self, JoinHandle}};
 
 use crate::orchestrator::OrchestrationPiece;
 
-use super::{balance, solve, PieceSolverContext};
+use super::{balance, PieceSolver, PieceSolverContext};
 
 struct ExecutionState<T> {
     active_threads: usize,
@@ -56,6 +56,8 @@ pub fn run(items: Vec<OrchestrationPiece>, context: Arc<PieceSolverContext>, thr
 }
 
 fn run_internal(context: Arc<PieceSolverContext>, thread_id: usize, local: Arc<Mutex<Vec<OrchestrationPiece>>>, execution_state: Arc<Mutex<ExecutionState<OrchestrationPiece>>>) {
+    let mut solver = PieceSolver::new();
+
     'outer: loop {
         let found = {
             let guard = local.try_lock();
@@ -69,7 +71,7 @@ fn run_internal(context: Arc<PieceSolverContext>, thread_id: usize, local: Arc<M
 
         match found {
             Some(work) => {
-                solve(work, &context);
+                solver.solve(work, &context);
             },
             None => {
                 let mut state = execution_state.lock().unwrap();

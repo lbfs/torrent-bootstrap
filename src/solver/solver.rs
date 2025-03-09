@@ -1,11 +1,11 @@
-use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::{Arc, Mutex}};
 
 use crate::{orchestrator::OrchestrationPiece, writer::FileWriter};
 
 use super::{multiple, single};
 
-pub struct PieceMatchResult<'a> {
-    pub source: Vec<Option<&'a PathBuf>>,
+pub struct PieceMatchResult {
+    pub source: Vec<Option<Arc<PathBuf>>>,
     pub bytes: Vec<u8>
 }
 
@@ -29,55 +29,72 @@ impl PieceSolverContext {
     }
 }
 
-fn solve_internal(item: &OrchestrationPiece, context: &PieceSolverContext) -> std::io::Result<bool> {
-    let mut is_rejected = false;
-    for file in item.files.iter() {
-        if file.metadata.is_padding_file { continue; }
-        if file.metadata.searches.is_none() {
-            is_rejected = true;
-            break;
+pub struct PieceSolver {
+    match_result: PieceMatchResult
+}
+
+impl PieceSolver {
+    pub fn new() -> PieceSolver {
+        let match_result = PieceMatchResult {
+            source: Vec::new(),
+            bytes: Vec::new()
+        };
+
+        PieceSolver {
+            match_result
         }
     }
 
-    let found = if is_rejected {
-        None
-    } else if item.files.len() == 1 {
-        single::scan(item)?
-    } else {
-        multiple::scan(item)?
-    };
+    pub fn solve(&mut self, item: OrchestrationPiece, context: &PieceSolverContext) { 
+        let res = self.solve_internal(&item, context);
+        
+        if let Err(err) = res {
+            let mut state = context.state.lock().unwrap();
     
-    if let Some(found) = &found {
-        context.writer.write(item, found)?;
+            state.failed_pieces += 1;
+    
+            eprintln!("Unable to solve piece due to following error: {:#?}", err);
+        }
     }
 
-    let mut state = context.state.lock().unwrap();
-
-    state.success_pieces += found.is_some() as usize;
-    state.failed_pieces += found.is_none() as usize;
-
-    let availability = (state.success_pieces as f64 / state.total_piece_count as f64) * 100_f64;
-    let scanned = ((state.success_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100_f64;
-
-    println!("{} of {} total pieces found - scanned: {:.02}% - availability: {:.02}%", 
-        state.success_pieces, 
-        state.total_piece_count,
-        scanned,
-        availability
-    );
-
-    Ok(found.is_some())
-}
-
-pub fn solve(item: OrchestrationPiece, context: &PieceSolverContext) { 
-    let res = solve_internal(&item, context);
+    fn solve_internal(&mut self, item: &OrchestrationPiece, context: &PieceSolverContext) -> std::io::Result<bool> {
+        let mut is_rejected = false;
+        for file in item.files.iter() {
+            if file.metadata.is_padding_file { continue; }
+            if file.metadata.searches.is_none() {
+                is_rejected = true;
+                break;
+            }
+        }
     
-    if let Err(err) = res {
+        let found = if is_rejected {
+            false
+        } else if item.files.len() == 1 {
+            single::scan(item, &mut self.match_result)?
+        } else {
+            multiple::scan(item, &mut self.match_result)?
+        };
+        
+        if found {
+            context.writer.write(item, &self.match_result)?;
+        }
+    
         let mut state = context.state.lock().unwrap();
-
-        state.failed_pieces += 1;
-
-        eprintln!("Unable to solve piece due to following error: {:#?}", err);
+    
+        state.success_pieces += found as usize;
+        state.failed_pieces += !found as usize;
+    
+        let availability = (state.success_pieces as f64 / state.total_piece_count as f64) * 100_f64;
+        let scanned = ((state.success_pieces + state.failed_pieces) as f64 / state.total_piece_count as f64) * 100_f64;
+    
+        println!("{} of {} total pieces found - scanned: {:.02}% - availability: {:.02}%", 
+            state.success_pieces, 
+            state.total_piece_count,
+            scanned,
+            availability
+        );
+    
+        Ok(found)
     }
 }
 

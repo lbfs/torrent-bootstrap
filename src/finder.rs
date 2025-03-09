@@ -385,21 +385,30 @@ fn format_path_single(torrent: &Torrent, export_directory: &Path) -> PathBuf {
 pub(crate) fn read_bytes(
     path: &Path,
     read_length: u64,
-    read_start_position: u64,
-) -> Result<Vec<u8>, std::io::Error> {
-    let mut handle = File::open(path)?;
-    read_bytes_with_handle(&mut handle, read_length, read_start_position)
-}
-
-pub(crate) fn read_bytes_with_handle(
-    handle: &mut File,
-    read_length: u64,
     read_start_position: u64
 ) -> Result<Vec<u8>, std::io::Error> {
-    let mut read_bytes = vec![0u8; read_length as usize];
+    let mut handle = File::open(path)?;
+    let mut read_bytes = Vec::with_capacity(read_length as usize);
 
     handle.seek(SeekFrom::Start(read_start_position))?;
-    handle.read_exact(&mut read_bytes)?;
+    handle.take(read_length)
+        .read_to_end(&mut read_bytes)?;
 
     Ok(read_bytes)
+}
+
+pub(crate) fn read_bytes_reuse_buffer(
+    path: &Path,
+    read_length: u64,
+    read_start_position: u64,
+    mut read_bytes: &mut Vec<u8>
+) -> Result<(), std::io::Error> {
+    let mut handle = File::open(path)?;
+
+    read_bytes.clear();
+    handle.seek(SeekFrom::Start(read_start_position))?;
+    handle.take(read_length)
+        .read_to_end(&mut read_bytes)?;
+
+    Ok(())
 }

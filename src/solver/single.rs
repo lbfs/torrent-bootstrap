@@ -1,30 +1,37 @@
 use sha1::{Digest, Sha1};
 
-use crate::{finder::read_bytes, orchestrator::OrchestrationPiece};
+use crate::{finder::read_bytes_reuse_buffer, orchestrator::OrchestrationPiece};
 
 use super::PieceMatchResult;
 
-pub fn scan<'a>(
-    entry: &'a OrchestrationPiece,
-) -> Result<Option<PieceMatchResult<'a>>, std::io::Error> {
-
+pub fn scan(
+    entry: &OrchestrationPiece,
+    result: &mut PieceMatchResult,
+) -> Result<bool, std::io::Error> {
     let first_file = entry.files.first().unwrap();
     let search_paths = first_file.metadata.searches.as_ref().unwrap();
 
     for search_path in search_paths {
-        let bytes = read_bytes(search_path, first_file.read_length, first_file.read_start_position)?;
+        read_bytes_reuse_buffer(
+            search_path,
+            first_file.read_length,
+            first_file.read_start_position,
+            &mut result.bytes,
+        )?;
 
         let mut hasher = Sha1::new();
-        hasher.update(&bytes);
+        hasher.update(&result.bytes);
         let hash = hasher.finalize();
 
         if entry.hash.as_slice().cmp(&hash).is_eq() {
-            return Ok(Some(PieceMatchResult { 
-                bytes, 
-                source: vec![Some(search_path)]
-            }));
+            let output_paths = &mut result.source;
+
+            output_paths.clear();
+            output_paths.push(Some(search_path.clone()));
+
+            return Ok(true)
         }
     }
 
-    Ok(None)
+    return Ok(false);
 }
