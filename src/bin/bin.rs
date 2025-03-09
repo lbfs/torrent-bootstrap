@@ -21,6 +21,10 @@ struct Cli {
     /// Number of read threads for hashing.
     #[arg(long, required = false, default_value_t = 1)]
     threads: usize,
+
+    /// If the export file on disk is smaller than the one in the torrent, then resize to match the torrent. This helps with accuracy during the scanning process.
+    #[arg(long, required = false, default_value_t = false)]
+    resize_export_files: bool,
 }
 
 fn run() -> std::io::Result<()> {
@@ -45,7 +49,8 @@ fn run() -> std::io::Result<()> {
         torrents,
         scan_directories: args.scan.iter().map(|value| Path::new(value).to_path_buf()).collect(),
         export_directory: Path::new(&args.export).to_path_buf(),
-        threads: args.threads
+        threads: args.threads,
+        resize_export_files: args.resize_export_files
     };
 
     let res = torrent_bootstrap::start(options);

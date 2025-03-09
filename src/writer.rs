@@ -1,21 +1,15 @@
-use std::{collections::HashMap, fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, sync::Mutex};
+use std::{fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, sync::Mutex};
 
 use crate::{finder::FileFinder, orchestrator::OrchestrationPiece, solver::PieceMatchResult};
 
 pub struct FileWriter {
-    export_id_to_lock: HashMap<usize, Mutex<()>>
+    lock: Mutex<()>
 }
 
 impl FileWriter {
-    pub fn new(finder: &FileFinder) -> FileWriter {
-        let mut export_id_to_lock: HashMap<usize, Mutex<()>> = HashMap::new();
-
-        for index in 0..finder.index_to_path.len() {
-            export_id_to_lock.insert(index, Mutex::new(()));
-        }       
-
+    pub fn new() -> FileWriter {
         FileWriter {
-            export_id_to_lock
+            lock: Mutex::new(())
         }
     }
 
@@ -25,13 +19,12 @@ impl FileWriter {
         for (file, source_path) in item.files.iter().zip(&result.source) {
             if file.is_padding_file { continue; }
     
-            let file_length = finder.find_length(file.export_index);
-            let file_export = finder.find_path_from_index(file.export_index);
+            let file_length = finder.find_length(file.metadata_id);
+            let file_export = finder.find_full_target(file.metadata_id);
     
             if source_path.is_some() && file_export.eq(source_path.unwrap()) { continue; }
-    
-            let lock = &self.export_id_to_lock[&file.export_index];
-            let _file_write_guard = lock.lock().expect("Should always lock.");
+
+            let _file_write_guard = self.lock.lock().expect("Should always lock.");
 
             fs::create_dir_all(file_export.parent().unwrap())?;
     

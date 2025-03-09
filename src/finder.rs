@@ -1,109 +1,278 @@
 use std::{
-    collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}, sync::Arc
+    collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Seek, SeekFrom}, os::unix::fs::MetadataExt, path::{Path, PathBuf}, sync::Arc
 };
 use walkdir::WalkDir;
 
 use crate::{get_sha1_hexdigest, Torrent};
 use crate::File as TorrentFile;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct FileNodeInfo {
+    device: u64,
+    inode: u64
+}
+
+pub struct FileCache {
+    nodes: HashMap<u64, HashMap<PathBuf, FileNodeInfo>>
+}
+
+impl FileCache {
+    pub fn new() -> FileCache {
+        FileCache {
+            nodes: HashMap::new()
+        }
+    }
+
+    pub fn add_by_directory_and_length(&mut self, directory: &Path, lengths: &HashSet<u64>) {
+        for result in WalkDir::new(directory) {
+            if let Err(e) = result {
+                eprintln!("Encountered error while searching directory: {}", e);
+                continue;
+            }
+    
+            let result = result.unwrap();
+            let metadata = result.metadata();
+    
+            if let Err(e) = result.metadata() {
+                eprintln!("Encountered error while reading metadata {}", e);
+                continue;
+            }
+    
+            let metadata = metadata.unwrap();
+
+            if metadata.is_dir() {
+                eprintln!("Skipped {:#?} as it is a directory.", result.path());
+                continue;
+            }
+
+            if metadata.is_symlink() {
+                eprintln!("Skipped {:#?} as it is a symlink.", result.path());
+                continue;
+            }
+
+            let file_length = metadata.len();
+    
+            if !lengths.contains(&file_length) { continue; }
+
+            let file_inode = metadata.ino();
+            let file_device = metadata.dev();
+
+            let info = FileNodeInfo {
+                device: file_device,
+                inode: file_inode
+            };
+
+            let length_entry = self.nodes.entry(file_length).or_default();
+            length_entry.insert(result.path().to_path_buf(), info);
+        }
+    }
+
+    pub fn add_by_path(&mut self, path: &Path, length: u64) {
+        let handle = OpenOptions::new()
+            .write(false)
+            .truncate(false)
+            .create(false)
+            .create_new(false)
+            .read(true)
+            .open(path);
+
+        if let Err(err) = handle {
+            eprintln!("Encountered error while opening file {:#?} with error {}", path, err);
+            return;
+        }
+
+        let result = handle.unwrap();
+        let metadata = result.metadata();
+    
+        if let Err(e) = result.metadata() {
+            eprintln!("Encountered error while reading metadata {}", e);
+            return;
+        }
+
+        let metadata = metadata.unwrap();
+
+        if metadata.is_dir() {
+            eprintln!("Skipped {:#?} as it is a directory.", path);
+            return;
+        }
+
+        if metadata.is_symlink() {
+            eprintln!("Skipped {:#?} as it is a symlink.", path);
+            return;
+        }
+
+        let file_length = metadata.len();
+    
+        if length != file_length { return; }
+
+        let file_inode = metadata.ino();
+        let file_device = metadata.dev();
+
+        let info = FileNodeInfo {
+            device: file_device,
+            inode: file_inode
+        };
+
+        let length_entry = self.nodes.entry(file_length).or_default();
+        length_entry.insert(path.to_path_buf(), info);
+    }
+}
+
 pub struct FileFinder {
-    search: Vec<Vec<Arc<PathBuf>>>,
-    lengths: Vec<u64>,
-    pub index_to_path: Vec<PathBuf>
+    search: HashMap<usize, Vec<Arc<PathBuf>>>,
+    lengths: HashMap<usize, u64>,
+    metadata_id_to_path: HashMap<usize, Arc<PathBuf>>,
+    metadata_id_lookup: HashMap<Vec<u8>, HashMap<usize, usize>>
 }
 
 impl FileFinder {
-    pub fn new(torrents: &[Torrent], export_directory: &Path, length_finder: HashMap<u64, Vec<Arc<PathBuf>>>) -> FileFinder {
-        let mut export_search: Vec<Vec<Arc<PathBuf>>> = Vec::new();
-        let mut index_to_path: Vec<PathBuf> = Vec::new();
-        let mut export_lengths: Vec<u64> = Vec::new();
+    pub fn new(metadata: &[TorrentTableEntry], file_cache: &FileCache) -> FileFinder {
+        let mut finder = FileFinder {
+            search: HashMap::new(),
+            lengths: HashMap::new(),
+            metadata_id_lookup: HashMap::new(),
+            metadata_id_to_path: HashMap::new()
+        };
 
-        for torrent in torrents {
-            if torrent.info.files.is_some() {
-                for file in torrent.info.files.as_ref().unwrap() {
-                    
-                    let full_target = format_path_multiple(file, torrent, export_directory);
-                    let partial_target = file.path.iter().collect::<PathBuf>();
+        FileFinder::initalize(&mut finder, metadata, file_cache);
 
-                    let searches = if let Some(entries) = length_finder.get(&file.length) {
-                        sort_by_target_absolute_path(&partial_target, &full_target, entries)
-                            .into_iter()
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
+        finder
+    }
 
-                    export_lengths.push(file.length);
-                    index_to_path.push(full_target);
-                    export_search.push(searches);
+    fn initalize(finder: &mut FileFinder,  metadata: &[TorrentTableEntry], file_cache: &FileCache) {
+        let mut path_to_reference_counted: HashMap<PathBuf, Arc<PathBuf>> = HashMap::new();
 
+        for entry in metadata {
+            let full_target = &entry.full_target;
+            let partial_target = &entry.partial_target;
+            let length = entry.file_length;
+            let metadata_id = entry.id;
+
+            if let Some(nodes) = file_cache.nodes.get(&length) {
+                // Generate search paths in most similar order to torrent file name and remove any hard links.
+                let mut found: Vec<_> = nodes.keys().map(|value| value.to_path_buf()).collect();
+
+                sort_by_target_absolute_path(&partial_target, &full_target, &mut found);
+                let entries = prune_duplicate_hard_links(file_cache, length, found);
+
+                // Store de-duplicated file paths
+                let search_references = entries
+                    .into_iter()
+                    .map(|path| FileFinder::add_path_or_get_if_exists(&mut path_to_reference_counted, path))
+                    .collect::<Vec<_>>();
+
+                finder.search.insert(metadata_id, search_references);
+            }
+        }
+
+        for entry in metadata {
+            finder.metadata_id_lookup
+                .entry(entry.info_hash.clone())
+                .or_default()
+                .entry(entry.file_index)
+                .or_insert(entry.id);
+
+            finder.lengths.insert(entry.id, entry.file_length);
+
+            let file_path = FileFinder::add_path_or_get_if_exists(&mut path_to_reference_counted, entry.full_target.clone());
+            finder.metadata_id_to_path.insert(entry.id, file_path);
+        }
+
+    }
+
+    fn add_path_or_get_if_exists(path_to_reference_counted: &mut HashMap<PathBuf, Arc<PathBuf>>, path: PathBuf) -> Arc<PathBuf> {
+        if let Some(datum) = path_to_reference_counted.get(&path) {
+            return datum.clone();
+        }
+
+        let value = Arc::new(path.clone());
+        path_to_reference_counted.insert(path, value.clone());
+        value
+    }
+
+    pub fn find_full_target(&self, id: usize) -> &PathBuf {
+        self.metadata_id_to_path.get(&id).as_ref().unwrap()
+    }
+
+    pub fn find_id_from_info_hash_file_index(&self, info_hash: &[u8], file_index: usize) -> usize {
+        let info_hash_entry = self.metadata_id_lookup.get(info_hash).unwrap();
+        *info_hash_entry.get(&file_index).unwrap()
+    }
+
+    pub fn find_length(&self, id: usize) -> u64 {
+        *self.lengths.get(&id).unwrap()
+    }
+
+    pub fn find_searches(&self, id: usize) -> Option<&Vec<Arc<PathBuf>>> {
+        self.search.get(&id)
+    }
+
+    pub fn find_searches_unsafe(&self, id: usize) -> &Vec<Arc<PathBuf>> {
+        self.search.get(&id).unwrap().as_ref()
+    }
+}
+
+fn find_file_similarity(entry: &Path, partial_target: &Path, full_target: &Path) -> usize {
+    if entry.ends_with(full_target) { 
+        0
+    } else if entry.ends_with(partial_target) {
+        1
+    } else if entry.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
+        2
+    } else {
+        3
+    }
+}
+
+fn sort_by_target_absolute_path(
+    partial_target: &Path, 
+    full_target: &Path, 
+    entries: &mut Vec<PathBuf>
+) {
+    entries.sort_by(|a, b| {
+        let left = find_file_similarity(a, partial_target, full_target);
+        let right = find_file_similarity(b, partial_target, full_target);
+
+        left.cmp(&right)
+    });
+}
+
+fn prune_duplicate_hard_links(
+    file_cache: &FileCache,
+    length: u64,
+    entries: Vec<PathBuf>
+) -> Vec<PathBuf> {
+    let mut seen: HashSet<FileNodeInfo> = HashSet::with_capacity(entries.len());
+    let mut new_entries = Vec::new();
+
+    for entry in entries.into_iter() {
+        if let Some(entries) = file_cache.nodes.get(&length) {
+            if let Some(info) = entries.get(&entry) {
+                if !seen.contains(&info) {
+                    seen.insert(info.clone());
+                    new_entries.push(entry);
                 }
-            } else if torrent.info.length.is_some() {
-                let full_target = format_path_single(torrent, export_directory);
-                let partial_target = Path::new(&torrent.info.name);
-
-                let searches = if let Some(entries) = length_finder.get(&torrent.info.length.unwrap()) {
-                    sort_by_target_absolute_path(partial_target, &full_target, entries)
-                        .into_iter()
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                export_lengths.push(torrent.info.length.unwrap());
-                index_to_path.push(full_target);
-                export_search.push(searches);
             }
         }
-
-        FileFinder {
-            search: export_search,
-            lengths: export_lengths,
-            index_to_path
-        }
     }
 
-    pub fn find_path_from_index(&self, index: usize) -> &PathBuf {
-        self.index_to_path.get(index).unwrap()
-    }
-
-    pub fn find_length(&self, index: usize) -> u64 {
-        *self.lengths.get(index).unwrap()
-    }
-
-    pub fn find_searches(&self, index: usize) -> &[Arc<PathBuf>] {
-        self.search.get(index).unwrap().as_ref()
-    }
+    new_entries
 }
 
-fn generate_export_path_to_length(torrents: &[Torrent], export_directory: &Path) -> HashMap<PathBuf, u64> {
-    let mut res = HashMap::new();
+// If the user has not selected to pre-allocate files in their torrent client, the files will be smaller on disk in some circumstances if the pieces
+// are not complete. This will ask the filesystem to correct the file length to the expected value, but also allow the rest of the script to properly 
+// acknowledge the file exists.
+pub fn fix_export_file_lengths(metadata: &[TorrentTableEntry]) -> Result<(), std::io::Error> {
+    for entry in metadata {
+        let handle = OpenOptions::new()
+            .write(false)
+            .truncate(false)
+            .create(false)
+            .create_new(false)
+            .read(true)
+            .open(&entry.full_target);
 
-    for torrent in torrents {
-        if torrent.info.files.is_some() {
-            for file in torrent.info.files.as_ref().unwrap() {
-                let target = format_path_multiple(file, torrent, export_directory);
-                let length = file.length;
-
-                res.insert(target, length);
-            }
-        } else if torrent.info.length.is_some() {
-            let target = format_path_single(torrent, export_directory);
-            let length = torrent.info.length.unwrap();
-
-            res.insert(target, length);
-        }
-    }
-
-    res
-}
-
-// Validate we aren't corrupting data; or that we haven't missed any files due to pre-allocation not happening.
-fn fix_export_path_lengths(export_path_with_length: HashMap<PathBuf, u64>) -> Result<HashMap<PathBuf, u64>, std::io::Error> {
-    let mut cache = HashMap::new();
-
-    for (export_path, expected_length) in export_path_with_length.into_iter() {
-        let handle = OpenOptions::new().write(true).create(false).open(&export_path);
+        let expected_length = entry.file_length;
 
         if let Err(err) = handle {
             if err.kind() == std::io::ErrorKind::NotFound {
@@ -118,133 +287,89 @@ fn fix_export_path_lengths(export_path_with_length: HashMap<PathBuf, u64>) -> Re
 
         if actual_length > expected_length {
             Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, 
-                format!("File {:#?} exists on filesystem, but the length of the file is greater than the file length in the piece. Aborting to prevent accidental data loss.", export_path)))?
-        } else if actual_length != expected_length {
-            handle.set_len(expected_length)?;
+                format!("File {:#?} exists on filesystem, but the length of the file is greater than the file length in the piece. Aborting to prevent accidental data loss.", &entry.full_target)))?
         }
-
-        cache.insert(export_path, expected_length);
     }
 
-    Ok(cache)
+    for entry in metadata {
+        let handle = OpenOptions::new()
+            .write(true)
+            .create(false)
+            .create_new(false)
+            .read(true)
+            .truncate(false)
+            .open(&entry.full_target)?;
+
+        let expected_length = entry.file_length;
+        handle.set_len(expected_length)?;
+    }
+
+    Ok(())
 }
 
-fn get_unique_file_lengths(torrents: &[Torrent]) -> HashSet<u64> {
-    let mut unique_lengths: HashSet<u64> = HashSet::new();
+// We only look for file lengths where the file length exists in the metadata.
+pub fn get_unique_file_lengths(metadata: &[TorrentTableEntry]) -> HashSet<u64> {
+    metadata
+        .iter()
+        .map(|value| value.file_length)
+        .collect::<HashSet<u64>>()
+}
+
+pub fn add_export_paths(metadata: &[TorrentTableEntry], file_cache: &mut FileCache) {
+    for entry in metadata {
+        file_cache.add_by_path(&entry.full_target, entry.file_length);
+    }
+}
+
+pub struct TorrentTableEntry {
+    id: usize,
+    info_hash: Vec<u8>,
+    file_index: usize,
+    file_length: u64,
+    full_target: PathBuf,
+    partial_target: PathBuf
+} 
+
+pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Path) -> Vec<TorrentTableEntry> {
+    let mut result = Vec::new();
+    let mut internal_id_counter: usize = 0;
 
     for torrent in torrents {
-        if torrent.info.length.is_some() {
-            unique_lengths.insert(torrent.info.length.unwrap());
-        } else if torrent.info.files.is_some() {
-            for file in torrent.info.files.as_ref().unwrap() {
-                unique_lengths.insert(file.length);
+        if torrent.info.files.is_some() {
+            for (file_index, file) in torrent.info.files.as_ref().unwrap().iter().enumerate() {
+                let full_target = format_path_multiple(file, torrent, export_directory);
+                let partial_target = file.path.iter().collect::<PathBuf>();
+
+                let meta: TorrentTableEntry = TorrentTableEntry { 
+                    id: internal_id_counter, 
+                    info_hash: torrent.info_hash.clone(), 
+                    file_index,
+                    file_length: file.length,
+                    full_target,
+                    partial_target
+                };
+
+                result.push(meta);
+                internal_id_counter += 1;
             }
+        } else if torrent.info.length.is_some() {
+            let full_target = format_path_single(torrent, export_directory);
+            let partial_target = Path::new(&torrent.info.name).to_path_buf();
+
+            let meta = TorrentTableEntry { 
+                id: internal_id_counter, 
+                info_hash: torrent.info_hash.clone(), 
+                file_index: 0,
+                file_length: torrent.info.length.unwrap(),
+                full_target,
+                partial_target
+            };
+
+            result.push(meta);
+            internal_id_counter += 1;
         }
     }
-
-    unique_lengths
-}
-
-fn add_matching_lengths_in_scan_directory(cache: &mut HashMap<u64, Vec<PathBuf>>, unique_lengths: &HashSet<u64>, scan_directory: &Path) {
-    for result in WalkDir::new(scan_directory) {
-        if let Err(e) = result {
-            eprintln!("Encountered error while searching directory: {}", e);
-            continue;
-        }
-
-        let result = result.unwrap();
-        let metadata = result.metadata();
-
-        if let Err(e) = result.metadata() {
-            eprintln!("Encountered error while reading metadata {}", e);
-            continue;
-        }
-
-        let metadata = metadata.unwrap();
-        
-        if !metadata.is_file() {
-            continue;
-        }
-
-        let file_length = metadata.len();
-
-        if unique_lengths.contains(&file_length) {
-            let items: &mut _ = cache.entry(file_length).or_default();
-            let path = result.path();
-
-            let found = items.iter()
-                .find(|value| (*value).eq(path));
-
-            if found.is_none() {
-                items.push(path.to_path_buf());
-            }
-        }
-    }
-}
-
-pub fn setup_finder_cache(torrents: &[Torrent], export_directory: &Path, scan_directories: &[PathBuf]) -> Result<HashMap<u64, Vec<PathBuf>>, std::io::Error> {
-    let mut cache: HashMap<u64, Vec<PathBuf>> = HashMap::new();
-    let unique_lengths = get_unique_file_lengths(torrents);
-
-    // Add any export files and treat them as part of the scan path, even if they are not explicitly defined there
-    // This will stop additional writes that do not need to occur. 
-    let export_path_to_length = generate_export_path_to_length(torrents, export_directory);
-    let export_path_to_length = fix_export_path_lengths(export_path_to_length)?;
-
-    for (export_path, length) in export_path_to_length {
-        let items: &mut _ = cache.entry(length).or_default();
-
-        let found = items.iter()
-            .find(|value| (*value).eq(&export_path));
-    
-        if found.is_none() {
-            println!("Adding {:#?} as it is not defined in the search path.", export_path);
-            items.push(export_path);
-        }
-    }
-
-    // Now, scan the preferred search paths from the user
-    for scan_directory in scan_directories {
-        add_matching_lengths_in_scan_directory(&mut cache, &unique_lengths, scan_directory);
-    }
-
-    Ok(cache)
-}
-
-pub fn intern_paths(finder: HashMap<u64, Vec<PathBuf>>) -> HashMap<u64, Vec<Arc<PathBuf>>> {
-    let mut cache= HashMap::new();
-
-    for (length, search) in finder {
-        cache.insert(length, 
-            search.into_iter().map(Arc::new).collect());
-    }
-
-    cache
-}
-
-fn sort_by_target_absolute_path(partial_target: &Path, full_target: &Path, entries: &[Arc<PathBuf>]) -> Vec<Arc<PathBuf>> {
-    let mut entries: Vec<Arc<PathBuf>> = entries.to_vec();
-
-    entries.sort_by(|a, b| {
-        let left = find_file_similarity(a, partial_target, full_target);
-        let right = find_file_similarity(b, partial_target, full_target);
-
-        left.cmp(&right)
-    });
-
-    entries
-}
-
-fn find_file_similarity(entry: &Path, partial_target: &Path, full_target: &Path) -> usize {
-    if entry.ends_with(full_target) { 
-        0
-    } else if entry.ends_with(partial_target) {
-        1
-    } else if entry.file_name().unwrap().eq(partial_target.file_name().unwrap()) {
-        2
-    } else {
-        3
-    }
+    result
 }
 
 fn format_path_multiple(file: &TorrentFile, torrent: &Torrent, export_directory: &Path) -> PathBuf {

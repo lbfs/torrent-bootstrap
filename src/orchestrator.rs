@@ -1,9 +1,18 @@
-use std::{fs::{self}, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    fs::{self},
+    path::PathBuf,
+    sync::Arc,
+    time::Instant,
+};
 
 use crate::{
-    finder::{intern_paths, setup_finder_cache, FileFinder},
+    finder::{
+        add_export_paths, build_torrent_metadata_table, fix_export_file_lengths,
+        get_unique_file_lengths, FileCache, FileFinder,
+    },
     solver::{run, PieceSolverContext},
-    torrent::{Pieces, Torrent}, writer::FileWriter
+    torrent::{Pieces, Torrent},
+    writer::FileWriter,
 };
 
 #[derive(Debug)]
@@ -14,7 +23,7 @@ pub struct OrchestrationPieceFile {
     pub is_padding_file: bool,
 
     // Filled out by orchestration
-    pub export_index: usize,
+    pub metadata_id: usize,
 }
 
 #[derive(Debug)]
@@ -28,6 +37,7 @@ pub struct OrchestratorOptions {
     pub scan_directories: Vec<PathBuf>,
     pub export_directory: PathBuf,
     pub threads: usize,
+    pub resize_export_files: bool
 }
 
 pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
@@ -58,10 +68,7 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
         now.elapsed().as_secs()
     );
 
-    let length_finder = setup_finder_cache(torrents, &options.export_directory, &options.scan_directories)?;
-    let length_finder = intern_paths(length_finder); 
-
-    let finder = FileFinder::new(torrents, &options.export_directory, length_finder);
+    let finder = setup_finder(torrents, &options.export_directory, &options.scan_directories, options.resize_export_files)?;
 
     println!(
         "File finder finished setup at {} seconds.",
@@ -69,10 +76,10 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     );
 
     // Setup Writer
-    let writer = FileWriter::new(&finder);
+    let writer = FileWriter::new();
 
     // Setup work
-    let work = convert_pieces_to_work(torrents);
+    let work = convert_pieces_to_work(torrents, &finder);
 
     // Start processing the work
     println!("Solver started at {} seconds.", now.elapsed().as_secs());
@@ -85,12 +92,31 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+fn setup_finder(torrents: &[Torrent], export_directory: &PathBuf, scan_directories: &[PathBuf], resize_export_files: bool) -> Result<FileFinder, std::io::Error> {
+    let mut file_cache = FileCache::new();
+
+    let metadata = build_torrent_metadata_table(torrents, export_directory);
+
+    if resize_export_files {
+        fix_export_file_lengths(&metadata)?;
+    }
+
+    let unique_lengths = get_unique_file_lengths(&metadata);
+
+    add_export_paths(&metadata, &mut file_cache);
+
+    for scan_directory in scan_directories {
+        file_cache.add_by_directory_and_length(scan_directory, &unique_lengths);
+    }
+
+    Ok(FileFinder::new(&metadata, &file_cache))
+}
+
 fn convert_pieces_to_work(
-    torrents: &[Torrent]
+    torrents: &[Torrent],
+    finder: &FileFinder
 ) -> Vec<OrchestrationPiece> {
     let mut results = Vec::new();
-
-    let mut base_index = 0;
 
     for torrent in torrents {
         let pieces = Pieces::from_torrent(torrent);
@@ -103,7 +129,7 @@ fn convert_pieces_to_work(
                     read_length: file.read_length,
                     read_start_position: file.read_start_position,
                     is_padding_file: file.is_padding_file,
-                    export_index: file.file_index + base_index
+                    metadata_id: finder.find_id_from_info_hash_file_index(&torrent.info_hash, file.file_index)
                 });
             }
 
@@ -113,12 +139,6 @@ fn convert_pieces_to_work(
             };
 
             results.push(matchable);
-        }
-
-        if torrent.info.files.is_some() {
-            base_index += torrent.info.files.as_ref().unwrap().len();
-        } else if torrent.info.length.is_some() {
-            base_index += 1;
         }
     }
 

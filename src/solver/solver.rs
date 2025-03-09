@@ -35,7 +35,7 @@ fn solve_internal(item: &OrchestrationPiece, context: &PieceSolverContext) -> st
     let mut is_rejected = false;
     for file in item.files.iter() {
         if file.is_padding_file { continue; }
-        if context.finder.find_searches(file.export_index).is_empty() {
+        if context.finder.find_searches(file.metadata_id).is_none() {
             is_rejected = true;
             break;
         }
@@ -101,7 +101,7 @@ pub fn balance(thread_entries: &mut [impl DerefMut<Target=Vec<OrchestrationPiece
 
     for entry in entries.into_iter() {
         if entry.files.len() == 1 {
-            let items: &mut _ = singles.entry(entry.files[0].export_index).or_default();
+            let items: &mut _ = singles.entry(entry.files[0].metadata_id).or_default();
             items.push(entry);
         } else {
             result.push(entry);
