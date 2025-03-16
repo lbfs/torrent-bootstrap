@@ -1,0 +1,19 @@
+[package]
+name = "torrent_bootstrap"
+version = "0.1.0"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.5.32", features = ["derive"] }
+sha1 = "0.10.6"
+walkdir = "2.5.0"
+
+[lib]
+name = "torrent_bootstrap"
+path = "src/lib.rs"
+
+[[bin]]
+name = "torrent_bootstrap"
+path = "src/bin/bin.rs" # replace bin.rs with name of your file
