@@ -41,9 +41,13 @@ pub struct OrchestratorOptions {
 }
 
 pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
-    let now = Instant::now();
     let options = &mut options;
 
+    if options.torrents.len() == 0 {
+        return Ok(());
+    }
+
+    let now = Instant::now();
     validate_input_paths(options)?;
 
     // Make sure we don't have duplicate torrents

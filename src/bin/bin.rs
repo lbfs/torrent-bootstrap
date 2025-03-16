@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read, path::{Path, PathBuf}, time::Instant};
+use std::{fs::{self}, path::{Path, PathBuf}, time::Instant};
 
 use clap::Parser;
 use torrent_bootstrap::{OrchestratorOptions, Torrent};
@@ -34,14 +34,14 @@ fn run() -> std::io::Result<()> {
     // Load Torrents
     let mut torrents: Vec<Torrent> = Vec::new();
     for torrent_path in &args.torrents {
-        let mut handle = File::open(torrent_path)?;
-        let mut bytes: Vec<u8> = Vec::new(); 
-        handle.read_to_end(&mut bytes)?;
-        let torrent = Torrent::from_bytes(&bytes)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.message))?;
+        let bytes = fs::read(torrent_path)?;
 
-        torrents.push(torrent);
+        match Torrent::from_bytes(&bytes) {
+            Ok(torrent) => torrents.push(torrent),
+            Err(error) => eprintln!("Unable to load torrent from path {:#?} due to error: {:#?}:{}", torrent_path, error.kind, error.message),
+        }
     }
+
     let torrent_len = torrents.len();
 
     // Start it up!
