@@ -2,6 +2,7 @@ use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::{Arc, Mutex}
 use crate::{get_sha1_hexdigest, orchestrator::OrchestrationPiece, writer::FileWriter};
 use super::{multiple, single};
 
+#[derive(Clone)]
 pub struct PieceMatchResult {
     pub source: Vec<Option<Arc<PathBuf>>>,
     pub bytes: Vec<u8>
@@ -14,40 +15,43 @@ pub struct PieceState {
     total: usize
 }
 
-pub struct PieceSolverContext {
-    pub writer: FileWriter,
-    pub state: Mutex<PieceState>
-}
-
-impl PieceSolverContext {
-    pub fn new(writer: FileWriter, total_piece_count: usize) -> PieceSolverContext {
-        PieceSolverContext {
-            writer,
-            state: Mutex::new(PieceState { success: 0, failed: 0, fault: 0, total: total_piece_count})
-        }
-    }
-}
-
+#[derive(Clone)]
 pub struct PieceSolver {
-    match_result: PieceMatchResult
+    match_result: PieceMatchResult,
+    writer: Arc<FileWriter>,
+    state: Arc<Mutex<PieceState>>
 }
 
 impl PieceSolver {
-    pub fn new() -> PieceSolver {
+    pub fn new(writer: FileWriter, total_pieces: usize, pieces: &[OrchestrationPiece]) -> PieceSolver {
+        let max_files = pieces
+            .iter()
+            .map(|piece| piece.files.len())
+            .max()
+            .unwrap_or(0);
+
+        let max_piece_length = pieces
+            .iter()
+            .map(|piece| piece.files.iter().map(|file| file.read_length).sum::<u64>())
+            .max()
+            .unwrap_or(0);
+
         let match_result = PieceMatchResult {
-            source: Vec::new(),
-            bytes: Vec::new()
+            source: Vec::with_capacity(max_files),
+            bytes: Vec::with_capacity(max_piece_length as usize)
         };
 
         PieceSolver {
-            match_result
+            match_result,
+            writer: Arc::new(writer),
+            state: Arc::new(Mutex::new(PieceState { success: 0, failed: 0, fault: 0, total: total_pieces }))
         }
     }
 
-    pub fn solve(&mut self, piece: OrchestrationPiece, context: &PieceSolverContext) { 
-        let result = self.solve_internal(&piece, context);
+    pub fn solve(&mut self, piece: OrchestrationPiece) { 
+        let result = self.solve_internal(&piece);
 
-        let mut state = context.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
 
         match result {
             Ok(found) => {
@@ -67,7 +71,7 @@ impl PieceSolver {
             availability, scanned, state.success, state.failed, state.fault, state.total);
     }
 
-    fn solve_internal(&mut self, piece: &OrchestrationPiece, context: &PieceSolverContext) -> std::io::Result<bool> {
+    fn solve_internal(&mut self, piece: &OrchestrationPiece) -> std::io::Result<bool> {
         let mut is_rejected = false;
         for file in piece.files.iter() {
             if file.metadata.is_padding_file { continue; }
@@ -86,7 +90,7 @@ impl PieceSolver {
         };
         
         if found {
-            context.writer.write(piece, &self.match_result)?;
+            self.writer.write(piece, &self.match_result)?;
         }
 
         Ok(found)

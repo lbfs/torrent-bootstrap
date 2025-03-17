@@ -34,19 +34,17 @@ impl FileCache {
             let metadata = result.metadata();
     
             if let Err(e) = result.metadata() {
-                eprintln!("Encountered error while reading metadata {}", e);
+                eprintln!("Encountered error while reading metadata: {}", e);
                 continue;
             }
     
             let metadata = metadata.unwrap();
 
             if metadata.is_dir() {
-                eprintln!("Skipped {:#?} as it is a directory.", result.path());
                 continue;
             }
 
             if metadata.is_symlink() {
-                eprintln!("Skipped {:#?} as it is a symlink.", result.path());
                 continue;
             }
 
@@ -92,12 +90,10 @@ impl FileCache {
         let metadata = metadata.unwrap();
 
         if metadata.is_dir() {
-            eprintln!("Skipped {:#?} as it is a directory.", path);
             return;
         }
 
         if metadata.is_symlink() {
-            eprintln!("Skipped {:#?} as it is a symlink.", path);
             return;
         }
 
@@ -324,13 +320,7 @@ pub fn populate_metadata_searches(metadata: &mut [TorrentMetadataEntry], file_ca
 
             sort_by_target_absolute_path(&partial_target, &full_target, &mut found);
 
-            let initial_size = found.len();
             let deduplicated_entries = prune_duplicate_hard_links(file_cache, length, found);
-            let deduplicated_size = deduplicated_entries.len();
-
-            if deduplicated_size != initial_size {
-                eprintln!("Removed {} hard-links from {:#?}", initial_size - deduplicated_size, &full_target);
-            }
 
             // Store de-duplicated file paths
             let search_references = deduplicated_entries

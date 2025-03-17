@@ -2,14 +2,14 @@ use std::{sync::{Arc, Mutex, MutexGuard}, thread::{self, JoinHandle}};
 
 use crate::orchestrator::OrchestrationPiece;
 
-use super::{balance, PieceSolver, PieceSolverContext};
+use super::{balance, PieceSolver};
 
 struct ExecutionState<T> {
     active_threads: usize,
     locks: Vec<Arc<Mutex<Vec<T>>>>
 }
 
-pub fn run(items: Vec<OrchestrationPiece>, context: Arc<PieceSolverContext>, thread_count: usize) {
+pub fn run(items: Vec<OrchestrationPiece>, solver: PieceSolver, thread_count: usize) {
     if items.is_empty() {
         return;
     }
@@ -40,10 +40,10 @@ pub fn run(items: Vec<OrchestrationPiece>, context: Arc<PieceSolverContext>, thr
     let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(thread_count);
     for (thread_id, local) in locks.into_iter().enumerate() {
         let execution_state = execution_state.clone();
-        let context = context.clone();
+        let solver = solver.clone();
 
         let handle = thread::spawn(move || {
-            run_internal(context, thread_id, local, execution_state);
+            run_internal(solver, thread_id, local, execution_state);
         });
 
         handles.push(handle);
@@ -55,9 +55,7 @@ pub fn run(items: Vec<OrchestrationPiece>, context: Arc<PieceSolverContext>, thr
     }
 }
 
-fn run_internal(context: Arc<PieceSolverContext>, thread_id: usize, local: Arc<Mutex<Vec<OrchestrationPiece>>>, execution_state: Arc<Mutex<ExecutionState<OrchestrationPiece>>>) {
-    let mut solver = PieceSolver::new();
-
+fn run_internal(mut solver: PieceSolver, thread_id: usize, local: Arc<Mutex<Vec<OrchestrationPiece>>>, execution_state: Arc<Mutex<ExecutionState<OrchestrationPiece>>>) {
     'outer: loop {
         let found = {
             let guard = local.try_lock();
@@ -71,7 +69,7 @@ fn run_internal(context: Arc<PieceSolverContext>, thread_id: usize, local: Arc<M
 
         match found {
             Some(work) => {
-                solver.solve(work, &context);
+                solver.solve(work);
             },
             None => {
                 let mut state = execution_state.lock().unwrap();

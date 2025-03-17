@@ -11,7 +11,7 @@ use crate::{
         fix_export_file_lengths, get_unique_file_lengths, populate_metadata_searches, FileCache,
         TorrentMetadataEntry,
     },
-    solver::{run, PieceSolverContext},
+    solver::{run, PieceSolver},
     torrent::{Pieces, Torrent},
     writer::FileWriter,
 };
@@ -88,8 +88,8 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     // Start processing the work
     println!("Solver started at {} seconds.", now.elapsed().as_secs());
 
-    let context = Arc::new(PieceSolverContext::new(writer, work.len()));
-    run(work, context, options.threads);
+    let solver = PieceSolver::new(writer, work.len(), &work);   
+    run(work, solver, options.threads);
 
     println!("Solver finished at {} seconds.", now.elapsed().as_secs());
 
@@ -160,7 +160,13 @@ fn validate_path(path: &PathBuf) -> Result<(), std::io::Error> {
         ))?
     }
 
-    let metadata = fs::metadata(path)?;
+    let metadata = fs::metadata(path);
+
+    if let Err(error) = &metadata {
+        Err(std::io::Error::new(error.kind(), format!("Encountered error while reading metadata for path {:#?}: {}", path, error)))?;
+    }
+
+    let metadata = metadata.unwrap();
 
     if !metadata.is_dir() {
         Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{:#?} is not a directory.", path)))?
