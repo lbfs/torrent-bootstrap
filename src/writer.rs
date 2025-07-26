@@ -1,58 +1,83 @@
-use std::{collections::HashMap, fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, sync::Mutex};
+use std::{fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, path::PathBuf, sync::Arc};
 
-use crate::{finder::TorrentMetadataEntry, orchestrator::OrchestrationPiece, solver::PieceMatchResult};
+use crate::{get_sha1_hexdigest, orchestrator::OrchestrationPiece};
 
-pub struct FileWriter {
-    locks: HashMap<usize, Mutex<()>>
-}
+pub struct FileWriter {}
 
 impl FileWriter {
-    pub fn new(metadata: &[TorrentMetadataEntry]) -> FileWriter {
-        let mut locks  = HashMap::new();
-
-        for entry in metadata {
-            locks.insert(entry.id, Mutex::new(()));
-        }
-
-        FileWriter {
-            locks: locks
-        }
+    pub fn new() -> FileWriter {
+        FileWriter {}
     }
 
-    pub fn write(&self, item: &OrchestrationPiece, result: &PieceMatchResult) -> Result<(), std::io::Error> {
-        let mut start_position = 0;
-    
-        for (file, source_path) in item.files.iter().zip(&result.source) {
-            if file.metadata.is_padding_file { continue; }
-    
-            let file_length = file.metadata.file_length;
-            let file_export = &file.metadata.full_target;
-    
-            if source_path.is_some() && file_export.eq(source_path.as_ref().unwrap().as_ref()) { continue; }
+    pub fn write(&self, item: &OrchestrationPiece, output_paths: Vec<Option<Arc<PathBuf>>>, output_bytes: Vec<u8>) -> Result<(), std::io::Error> {
+        let mut next_start_position = 0;
 
+        for (file, source_path) in item.files.iter().zip(&output_paths) {
+            // Always update the next position in-case we have to exit-early
+            let start_position = next_start_position;
             let end_position = start_position + file.read_length as usize;
-    
-            let _file_write_guard = self.locks[&file.metadata.id]
+            next_start_position = end_position;
+
+            // Take ownership of the current processing state
+            let mut processing_state = file.metadata.processing_state
                 .lock()
-                .expect("Should always lock.");
+                .expect("Should always lock the processing state.");
 
-            fs::create_dir_all(file_export.parent().unwrap())?;
+            // Check if we can skip writing to disk
+            let is_padding_file = file.metadata.is_padding_file;
+            let file_export = &file.metadata.full_target;
 
-            let mut handle = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(file_export)?;
-            
-            handle.set_len(file_length)?;
-            handle.seek(SeekFrom::Start(file.read_start_position))?;
-            handle.write_all(&result.bytes[start_position..end_position])?;
+            // The file is all zeros, do not write anything.
+            if is_padding_file {
+                processing_state.ignored_pieces += 1;
+                continue; 
+            }
+    
+            // The path on disk is the same as the discovered path, therefore, skip writing. 
+            if source_path.is_some() && file_export.eq(source_path.as_ref().unwrap().as_ref()) {
+                processing_state.ignored_pieces += 1;
+                continue;
+            }
 
-            drop(_file_write_guard);
+            // This is new byte content, write it to disk.
+            let res: Result<_, std::io::Error> = {
+                fs::create_dir_all(file_export.parent().unwrap())?;
 
-            start_position = end_position;
+                let mut handle = OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(file_export)?;
+                
+                handle.set_len(file.metadata.file_length)?;
+                handle.seek(SeekFrom::Start(file.read_start_position))?;
+                handle.write_all(&output_bytes[start_position..end_position])?;
+
+                Ok(())
+            };
+
+            processing_state.writable_pieces += res.is_ok() as usize;
+            processing_state.ignored_pieces += res.is_err() as usize;
+
         }
     
+        for file in &item.files {
+            let processing_state = file.metadata.processing_state
+                .lock()
+                .expect("Should always lock the processing state.");
+
+            if processing_state.writable_pieces + processing_state.ignored_pieces == processing_state.total_pieces {
+                println!(
+                    "Completely processed file at {:#?} for torrent {} with {} ignored pieces, {} writable pieces of {} total pieces", 
+                    file.metadata.full_target, 
+                    get_sha1_hexdigest(&file.metadata.info_hash),
+                    processing_state.ignored_pieces,
+                    processing_state.writable_pieces,
+                    processing_state.total_pieces
+                )
+            }
+        }
+
         Ok(())
     }    
 }

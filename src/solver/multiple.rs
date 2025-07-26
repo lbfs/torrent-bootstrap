@@ -4,13 +4,12 @@ use sha1::{digest::core_api::CoreWrapper, Digest, Sha1, Sha1Core};
 
 use crate::{finder::read_bytes, orchestrator::OrchestrationPiece};
 
-use super::PieceMatchResult;
-
 type Cache = Vec<Vec<(Option<Arc<PathBuf>>, Vec<u8>)>>;
 
 pub fn scan(
     piece: &OrchestrationPiece,
-    result: &mut PieceMatchResult
+    output_paths: &mut Vec<Option<Arc<PathBuf>>>,
+    output_bytes: &mut Vec<u8>
 ) -> std::io::Result<bool> {
     let loaded = preload(piece)?;
 
@@ -19,16 +18,13 @@ pub fn scan(
 
     let found = scan_internal(0, &mut check, &loaded, &mut hasher, piece);
 
-    if found { 
-        let output_buffer = &mut result.bytes;
-        let output_paths = &mut result.source;
-
-        output_buffer.clear();
+    if found {
+        output_bytes.clear();
         output_paths.clear();
 
         for (depth, index) in check.into_iter().enumerate() {
             let (path, value) = &loaded[depth][index];
-            output_buffer.extend(value);
+            output_bytes.extend(value);
             output_paths.push(path.clone());
         }
 

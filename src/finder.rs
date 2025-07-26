@@ -1,9 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Seek, SeekFrom}, os::unix::fs::MetadataExt, path::{Path, PathBuf}, sync::Arc
+    collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Seek, SeekFrom}, os::unix::fs::MetadataExt, path::{Path, PathBuf}, sync::{Arc, Mutex}
 };
 use walkdir::WalkDir;
 
-use crate::{get_sha1_hexdigest, Torrent};
+use crate::{get_sha1_hexdigest, Pieces, Torrent};
 use crate::File as TorrentFile;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -246,15 +246,60 @@ pub fn add_export_paths(metadata: &[TorrentMetadataEntry], file_cache: &mut File
 }
 
 #[derive(Debug)]
+pub struct TorrentProcessState {
+    // Pieces that were discovered successfully
+    pub success_pieces: usize,
+
+    // Pieces that failed to find a successful on disk match.
+    pub failed_pieces: usize,
+
+    // Pieces that encountered a processing exception, like I/O error.
+    pub fault_pieces: usize,
+
+    // We may detect successful pieces that don't need to be written, as they 
+    // may either be padding files or content is already on-disk.
+    pub writable_pieces: usize,
+    pub ignored_pieces: usize,
+    
+    // Total pieces that might ever exist.
+    pub total_pieces: usize
+}
+
+impl TorrentProcessState {
+    pub fn new(total_pieces: usize) -> TorrentProcessState {
+        TorrentProcessState {
+            success_pieces: 0,
+            failed_pieces: 0,
+            fault_pieces: 0,
+            writable_pieces: 0,
+            ignored_pieces: 0,
+            total_pieces
+        }
+    }
+}
+
+pub fn build_global_torrent_state(torrents: &[Torrent]) -> TorrentProcessState {
+    let mut total_pieces = 0;
+
+    for torrent in torrents {
+        let pieces = Pieces::from_torrent(torrent);
+        total_pieces += pieces.len();
+    }
+
+    TorrentProcessState::new(total_pieces)
+}
+
+#[derive(Debug)]
 pub struct TorrentMetadataEntry {
     pub id: usize,
-    info_hash: Vec<u8>,
+    pub info_hash: Vec<u8>,
     file_index: usize,
     pub file_length: u64,
     pub full_target: PathBuf,
     partial_target: PathBuf,
     pub is_padding_file: bool,
-    pub searches: Option<Box<[Arc<PathBuf>]>>
+    pub searches: Option<Box<[Arc<PathBuf>]>>,
+    pub processing_state: Mutex<TorrentProcessState>
 } 
 
 pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Path) -> Vec<TorrentMetadataEntry> {
@@ -262,11 +307,27 @@ pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Pat
     let mut internal_id_counter: usize = 0;
 
     for torrent in torrents {
+        let pieces = Pieces::from_torrent(torrent);
+
         if torrent.info.files.is_some() {
             for (file_index, file) in torrent.info.files.as_ref().unwrap().iter().enumerate() {
                 let full_target = format_path_multiple(file, torrent, export_directory);
                 let partial_target = file.path.iter().collect::<PathBuf>();
                 let is_padding_file = file.path.len() == 2 && file.path[0] == ".pad" && file.path[1].chars().all(char::is_numeric);
+
+                let total_pieces = pieces
+                    .iter()
+                    .filter(|piece| piece.files.iter().find(|iter_file| iter_file.file_index == file_index).is_some())
+                    .count();
+
+                let state = TorrentProcessState {
+                    success_pieces: 0,
+                    failed_pieces: 0,
+                    fault_pieces: 0,
+                    writable_pieces: 0,
+                    ignored_pieces: 0,
+                    total_pieces
+                };
 
                 let meta: TorrentMetadataEntry = TorrentMetadataEntry { 
                     id: internal_id_counter, 
@@ -276,7 +337,8 @@ pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Pat
                     full_target,
                     partial_target,
                     is_padding_file,
-                    searches: None
+                    searches: None,
+                    processing_state: Mutex::new(state)
                 };
 
                 result.push(meta);
@@ -286,6 +348,16 @@ pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Pat
             let full_target = format_path_single(torrent, export_directory);
             let partial_target = Path::new(&torrent.info.name).to_path_buf();
 
+            let total_pieces = pieces.len();
+            let state = TorrentProcessState {
+                success_pieces: 0,
+                failed_pieces: 0,
+                fault_pieces: 0,
+                writable_pieces: 0,
+                ignored_pieces: 0,
+                total_pieces
+            };
+
             let meta = TorrentMetadataEntry { 
                 id: internal_id_counter, 
                 info_hash: torrent.info_hash.clone(), 
@@ -294,7 +366,8 @@ pub fn build_torrent_metadata_table(torrents: &[Torrent], export_directory: &Pat
                 full_target,
                 partial_target,
                 is_padding_file: false,
-                searches: None
+                searches: None,
+                processing_state: Mutex::new(state)
             };
 
             result.push(meta);

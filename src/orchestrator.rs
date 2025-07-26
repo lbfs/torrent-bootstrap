@@ -7,9 +7,7 @@ use std::{
 
 use crate::{
     finder::{
-        add_export_paths, build_info_hash_file_index_lookup_table, build_torrent_metadata_table,
-        fix_export_file_lengths, get_unique_file_lengths, populate_metadata_searches, FileCache,
-        TorrentMetadataEntry,
+        add_export_paths, build_global_torrent_state, build_info_hash_file_index_lookup_table, build_torrent_metadata_table, fix_export_file_lengths, get_unique_file_lengths, populate_metadata_searches, FileCache, TorrentMetadataEntry
     },
     solver::{run, PieceSolver},
     torrent::{Pieces, Torrent},
@@ -80,15 +78,16 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     );
 
     // Setup Writer
-    let writer = FileWriter::new(&metadata);
+    let writer = FileWriter::new();
 
     // Setup work
     let work = convert_pieces_to_work(torrents, metadata);
+    let global_state = build_global_torrent_state(torrents);
 
     // Start processing the work
     println!("Solver started at {} seconds.", now.elapsed().as_secs());
 
-    let solver = PieceSolver::new(writer, work.len(), &work);   
+    let solver = PieceSolver::new(writer, global_state, &work);   
     run(work, solver, options.threads);
 
     println!("Solver finished at {} seconds.", now.elapsed().as_secs());
