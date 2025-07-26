@@ -1,16 +1,31 @@
-use std::{fs::{self, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, path::PathBuf, sync::Arc};
+use std::{fs::{self, File, OpenOptions}, io::{Seek, SeekFrom, Write as IoWrite}, path::PathBuf, sync::Arc};
 
-use crate::{get_sha1_hexdigest, orchestrator::OrchestrationPiece};
+use hashlru::Cache;
+use crate::orchestrator::OrchestrationPiece;
 
-pub struct FileWriter {}
+pub struct FileWriter {
+    cache: Cache<usize, File>
+}
 
 impl FileWriter {
-    pub fn new() -> FileWriter {
-        FileWriter {}
+    pub fn new(pieces: &[OrchestrationPiece], threads: usize) -> FileWriter {
+        let max_files = pieces
+            .iter()
+            .map(|piece| piece.files.len())
+            .max()
+            .unwrap_or(0);
+
+        let max_opened_files = std::cmp::max(max_files, threads);
+        let cache: Cache<usize, File> = Cache::new(max_opened_files);
+
+        FileWriter {
+            cache
+        }
     }
 
-    pub fn write(&self, item: &OrchestrationPiece, output_paths: &Vec<Option<Arc<PathBuf>>>, output_bytes: &Vec<u8>) -> Result<(), std::io::Error> {
+    pub fn write(&mut self, item: &OrchestrationPiece, output_paths: &Vec<Option<Arc<PathBuf>>>, output_bytes: &Vec<u8>) -> Result<bool, std::io::Error> {
         let mut next_start_position = 0;
+        let mut wrote_to_disk = false;
 
         for (file, source_path) in item.files.iter().zip(output_paths) {
             // Always update the next position in-case we have to exit-early
@@ -40,38 +55,40 @@ impl FileWriter {
             }
 
             // This is new byte content, write it to disk.
-            fs::create_dir_all(file_export.parent().unwrap())?;
+            let result: Result<bool, std::io::Error> = {
+                let id = file.metadata.id;
+                if let None = self.cache.get_mut(&id) {
+                    fs::create_dir_all(file_export.parent().unwrap())?;
 
-            let mut handle = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(file_export)?;
-            
-            handle.set_len(file.metadata.file_length)?;
-            handle.seek(SeekFrom::Start(file.read_start_position))?;
-            handle.write_all(&output_bytes[start_position..end_position])?;
-            processing_state.writable_pieces += 1;
-        }
-    
-        for file in &item.files {
-            let processing_state = file.metadata.processing_state
-                .lock()
-                .expect("Should always lock the processing state.");
+                    let handle = OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(false)
+                        .open(file_export)?;
 
-            if processing_state.writable_pieces + processing_state.ignored_pieces == processing_state.total_pieces {
-                println!(
-                    "Completely processed file at {:#?} for torrent {} with {} ignored pieces, {} writable pieces of {} total pieces", 
-                    file.metadata.full_target, 
-                    get_sha1_hexdigest(&file.metadata.info_hash),
-                    processing_state.ignored_pieces,
-                    processing_state.writable_pieces,
-                    processing_state.total_pieces
-                )
+                    handle.set_len(file.metadata.file_length)?;
+                    self.cache.insert(id, handle);
+                }
+
+                let handle = self.cache.get_mut(&file.metadata.id).unwrap();
+                handle.seek(SeekFrom::Start(file.read_start_position))?;
+                handle.write_all(&output_bytes[start_position..end_position])?;
+
+                Ok(true)
+            };
+
+            match &result {
+                Ok(found) => {
+                    let found = *found;
+                    processing_state.writable_pieces += found as usize;
+                    processing_state.ignored_pieces += !found as usize;
+                    if found { wrote_to_disk = true; } 
+                },
+                Err(_) => { return result; },
             }
         }
 
-        Ok(())
+        Ok(wrote_to_disk)
     }    
 }
 

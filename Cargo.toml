@@ -9,6 +9,7 @@ edition = "2024"
 clap = { version = "4.5.32", features = ["derive"] }
 sha1 = "0.10.6"
 walkdir = "2.5.0"
+hashlru = "0.11.1"
 
 [lib]
 name = "torrent_bootstrap"

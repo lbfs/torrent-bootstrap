@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::{mpsc::SyncSender, Arc}};
+use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::{mpsc::{SyncSender}, Arc}};
 use crate::{get_sha1_hexdigest, orchestrator::OrchestrationPiece};
 use super::{multiple, single};
 

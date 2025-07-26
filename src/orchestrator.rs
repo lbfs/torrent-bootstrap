@@ -8,10 +8,7 @@ use std::{
 use crate::{
     finder::{
         add_export_paths, build_global_torrent_state, build_info_hash_file_index_lookup_table, build_torrent_metadata_table, fix_export_file_lengths, get_unique_file_lengths, populate_metadata_searches, FileCache, TorrentMetadataEntry
-    },
-    solver::{run, PieceSolver, PieceUpdate},
-    torrent::{Pieces, Torrent},
-    writer::FileWriter,
+    }, get_sha1_hexdigest, solver::{run, PieceSolver, PieceUpdate}, torrent::{Pieces, Torrent}, writer::FileWriter
 };
 
 #[derive(Debug)]
@@ -77,15 +74,20 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
         now.elapsed().as_secs()
     );
 
-    // Setup Writer
+    // Setup work
+    let work = convert_pieces_to_work(torrents, metadata);
 
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<PieceUpdate>(1);
+    // Setup Writer
+    let mut writer = FileWriter::new(&work, options.threads);
     let mut global_state = build_global_torrent_state(torrents);
 
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<PieceUpdate>(1);
     let writer_thread = std::thread::spawn(move || {
-        let writer = FileWriter::new();
-
         while let Ok(mut result) = receiver.recv() {
+
+            // Write to disk
+            let mut wrote_to_disk = false;
+
             if result.found && !result.fault && result.output_bytes.is_some() && result.output_paths.is_some() {
                 let res = writer.write(
                     &result.piece, 
@@ -93,37 +95,64 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
                     result.output_bytes.as_ref().unwrap()
                 );
 
-                if let Err(err) = res {
-                    eprintln!("Failed to write piece to disk: {:#?}", err);
-                    result.fault = true;
+                match res {
+                    Ok(found) => { wrote_to_disk = found },
+                    Err(err) => {
+                        eprintln!("Failed to write piece to disk: {:#?}", err);
+                        result.fault = true;
+                    },
                 }
             }
 
+            // Print a message if all pieces for a file are finished processing
+            for file in &result.piece.files {
+                let processing_state = file.metadata.processing_state
+                    .lock()
+                    .expect("Should always lock the processing state.");
+
+                if processing_state.writable_pieces + processing_state.ignored_pieces + processing_state.fault_pieces == processing_state.total_pieces {
+                    println!(
+                        "Finished processing file at {:#?} for torrent {} with {} ignored pieces, {} fault pieces, {} writable pieces of {} total pieces", 
+                        file.metadata.full_target, 
+                        get_sha1_hexdigest(&file.metadata.info_hash),
+                        processing_state.ignored_pieces,
+                        processing_state.fault_pieces,
+                        processing_state.writable_pieces,
+                        processing_state.total_pieces
+                    )
+                }
+            }
+
+            // Print out the global processing status
             global_state.success_pieces += (result.found && !result.fault) as usize;
             global_state.failed_pieces += (!result.found && !result.fault) as usize;
             global_state.fault_pieces += (result.fault) as usize;
+            global_state.writable_pieces += (wrote_to_disk) as usize;
+            global_state.ignored_pieces += (!wrote_to_disk) as usize;
 
             let availability = (global_state.success_pieces as f64 / global_state.total_pieces as f64) * 100_f64;
-            let scanned = ((global_state.success_pieces + global_state.failed_pieces + global_state.fault_pieces) as f64 / global_state.total_pieces as f64) * 100_f64;
+            let processed = global_state.success_pieces + global_state.failed_pieces + global_state.fault_pieces;
+            let scanned = (processed as f64 / global_state.total_pieces as f64) * 100_f64;
         
-            println!("Availability: {:.03}%, Scanned: {:.03}% - Success: {}, Failed: {}, Faulted: {}, Total: {}", 
-                availability, scanned, global_state.success_pieces, global_state.failed_pieces, global_state.fault_pieces, global_state.total_pieces);
+            println!(
+                "Availability: {:.03}%, Scanned: {:.03}% - Success: {}, Failed: {}, Faulted: {}, Written: {}, Ignored: {} Total: {} of {}", 
+                availability, scanned, global_state.success_pieces, global_state.failed_pieces, global_state.fault_pieces, 
+                global_state.writable_pieces, global_state.ignored_pieces, processed, global_state.total_pieces
+            );
         }
-
     });
 
-    // Setup work
-    let work = convert_pieces_to_work(torrents, metadata);
-
     // Start processing the work
-    println!("Solver started at {} seconds.", now.elapsed().as_secs());
+    println!("Solver threads started at {} seconds.", now.elapsed().as_secs());
 
-    let solver = PieceSolver::new(sender.clone(), &work);   
+    let solver = PieceSolver::new(sender, &work);   
     run(work, solver, options.threads);
+
+    println!("Solver threads completed at {} seconds.", now.elapsed().as_secs());
 
     writer_thread.join().expect("Writer thread should not crash.");
 
-    println!("Solver finished at {} seconds.", now.elapsed().as_secs());
+    println!("Writer threads completed at {} seconds.", now.elapsed().as_secs());
 
     Ok(())
 }
