@@ -9,7 +9,7 @@ use crate::{
     finder::{
         add_export_paths, build_global_torrent_state, build_info_hash_file_index_lookup_table, build_torrent_metadata_table, fix_export_file_lengths, get_unique_file_lengths, populate_metadata_searches, FileCache, TorrentMetadataEntry
     },
-    solver::{run, PieceSolver},
+    solver::{run, PieceSolver, PieceUpdate},
     torrent::{Pieces, Torrent},
     writer::FileWriter,
 };
@@ -78,17 +78,50 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     );
 
     // Setup Writer
-    let writer = FileWriter::new();
+
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<PieceUpdate>(1);
+    let mut global_state = build_global_torrent_state(torrents);
+
+    let writer_thread = std::thread::spawn(move || {
+        let writer = FileWriter::new();
+
+        while let Ok(mut result) = receiver.recv() {
+            if result.found && !result.fault && result.output_bytes.is_some() && result.output_paths.is_some() {
+                let res = writer.write(
+                    &result.piece, 
+                    result.output_paths.as_ref().unwrap(), 
+                    result.output_bytes.as_ref().unwrap()
+                );
+
+                if let Err(err) = res {
+                    eprintln!("Failed to write piece to disk: {:#?}", err);
+                    result.fault = true;
+                }
+            }
+
+            global_state.success_pieces += (result.found && !result.fault) as usize;
+            global_state.failed_pieces += (!result.found && !result.fault) as usize;
+            global_state.fault_pieces += (result.fault) as usize;
+
+            let availability = (global_state.success_pieces as f64 / global_state.total_pieces as f64) * 100_f64;
+            let scanned = ((global_state.success_pieces + global_state.failed_pieces + global_state.fault_pieces) as f64 / global_state.total_pieces as f64) * 100_f64;
+        
+            println!("Availability: {:.03}%, Scanned: {:.03}% - Success: {}, Failed: {}, Faulted: {}, Total: {}", 
+                availability, scanned, global_state.success_pieces, global_state.failed_pieces, global_state.fault_pieces, global_state.total_pieces);
+        }
+
+    });
 
     // Setup work
     let work = convert_pieces_to_work(torrents, metadata);
-    let global_state = build_global_torrent_state(torrents);
 
     // Start processing the work
     println!("Solver started at {} seconds.", now.elapsed().as_secs());
 
-    let solver = PieceSolver::new(writer, global_state, &work);   
+    let solver = PieceSolver::new(sender.clone(), &work);   
     run(work, solver, options.threads);
+
+    writer_thread.join().expect("Writer thread should not crash.");
 
     println!("Solver finished at {} seconds.", now.elapsed().as_secs());
 

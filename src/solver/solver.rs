@@ -1,17 +1,24 @@
-use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::{Arc, Mutex}};
-use crate::{finder::TorrentProcessState, get_sha1_hexdigest, orchestrator::OrchestrationPiece, writer::FileWriter};
+use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::{mpsc::SyncSender, Arc}};
+use crate::{get_sha1_hexdigest, orchestrator::OrchestrationPiece};
 use super::{multiple, single};
+
+pub struct PieceUpdate {
+    pub piece: OrchestrationPiece,
+    pub found: bool,
+    pub fault: bool,
+    pub output_bytes: Option<Vec<u8>>,
+    pub output_paths: Option<Vec<Option<Arc<PathBuf>>>>
+}
 
 #[derive(Clone)]
 pub struct PieceSolver {
     output_paths: Vec<Option<Arc<PathBuf>>>,
     output_bytes: Vec<u8>,
-    writer: Arc<FileWriter>,
-    global_state: Arc<Mutex<TorrentProcessState>>
+    sender: SyncSender<PieceUpdate>,
 }
 
 impl PieceSolver {
-    pub fn new(writer: FileWriter, global_state: TorrentProcessState, pieces: &[OrchestrationPiece]) -> PieceSolver {
+    pub fn new(sender: SyncSender<PieceUpdate>, pieces: &[OrchestrationPiece]) -> PieceSolver {
         let max_files = pieces
             .iter()
             .map(|piece| piece.files.len())
@@ -27,51 +34,49 @@ impl PieceSolver {
         PieceSolver {
             output_paths: Vec::with_capacity(max_files),
             output_bytes: Vec::with_capacity(max_piece_length as usize),
-            writer: Arc::new(writer),
-            global_state: Arc::new(Mutex::new(global_state))
+            sender,
         }
     }
 
-    pub fn solve(&mut self, piece: OrchestrationPiece) { 
+    pub fn solve(&mut self, piece: OrchestrationPiece) {
         let result = self.solve_internal(&piece);
-
-        let mut success: usize = 0;
-        let mut failed: usize = 0;
-        let mut fault: usize = 0;
-
-        match result {
+        
+        let state_update = match result {
             Ok(found) => {
-                success += found as usize;
-                failed += !found as usize;
+                let output_paths;
+                let output_bytes;
+
+                if found {
+                    output_paths = Some(self.output_paths.clone());
+                    output_bytes = Some(self.output_bytes.clone());
+                } else {
+                    output_paths = None;
+                    output_bytes = None;
+                }
+
+                PieceUpdate {
+                    piece,
+                    found,
+                    fault: false,
+                    output_paths,
+                    output_bytes
+                }
             },
             Err(err) => {
-                fault = 1;
                 eprintln!("Unable to solve piece {} due to following error: {:#?}", get_sha1_hexdigest(&piece.hash), err);
-            },
-        }
+                PieceUpdate {
+                    piece,
+                    found: false,
+                    fault: true,
+                    output_paths: None,
+                    output_bytes: None
+                }
+            }
+        };
 
-        // Update the file local processing state
-        for file in &piece.files {
-            let mut processing_state = file.metadata.processing_state
-                .lock()
-                .expect("Should always lock the processing state in solver thread.");
-
-            processing_state.failed_pieces += failed;
-            processing_state.success_pieces += success;
-            processing_state.fault_pieces += fault;
-        }
-
-        // Update the global processing state
-        let mut state = self.global_state.lock().unwrap();
-        state.success_pieces += success;
-        state.failed_pieces += failed;
-        state.fault_pieces += fault;
-
-        let availability = (state.success_pieces as f64 / state.total_pieces as f64) * 100_f64;
-        let scanned = ((state.success_pieces + state.failed_pieces + state.fault_pieces) as f64 / state.total_pieces as f64) * 100_f64;
-    
-        println!("Availability: {:.03}%, Scanned: {:.03}% - Success: {}, Failed: {}, Faulted: {}, Total: {}", 
-            availability, scanned, state.success_pieces, state.failed_pieces, state.fault_pieces, state.total_pieces);
+        self.sender
+            .send(state_update)
+            .expect("Sender should only be shut-down after executor service has exited.");
     }
 
     fn solve_internal(&mut self, piece: &OrchestrationPiece) -> std::io::Result<bool> {
@@ -91,10 +96,6 @@ impl PieceSolver {
         } else {
             multiple::scan(piece, &mut self.output_paths, &mut self.output_bytes)?
         };
-        
-        if found {
-            self.writer.write(piece, self.output_paths.clone(), self.output_bytes.clone())?;
-        }
 
         Ok(found)
     }

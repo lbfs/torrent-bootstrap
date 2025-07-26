@@ -9,10 +9,10 @@ impl FileWriter {
         FileWriter {}
     }
 
-    pub fn write(&self, item: &OrchestrationPiece, output_paths: Vec<Option<Arc<PathBuf>>>, output_bytes: Vec<u8>) -> Result<(), std::io::Error> {
+    pub fn write(&self, item: &OrchestrationPiece, output_paths: &Vec<Option<Arc<PathBuf>>>, output_bytes: &Vec<u8>) -> Result<(), std::io::Error> {
         let mut next_start_position = 0;
 
-        for (file, source_path) in item.files.iter().zip(&output_paths) {
+        for (file, source_path) in item.files.iter().zip(output_paths) {
             // Always update the next position in-case we have to exit-early
             let start_position = next_start_position;
             let end_position = start_position + file.read_length as usize;
@@ -40,25 +40,18 @@ impl FileWriter {
             }
 
             // This is new byte content, write it to disk.
-            let res: Result<_, std::io::Error> = {
-                fs::create_dir_all(file_export.parent().unwrap())?;
+            fs::create_dir_all(file_export.parent().unwrap())?;
 
-                let mut handle = OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(file_export)?;
-                
-                handle.set_len(file.metadata.file_length)?;
-                handle.seek(SeekFrom::Start(file.read_start_position))?;
-                handle.write_all(&output_bytes[start_position..end_position])?;
-
-                Ok(())
-            };
-
-            processing_state.writable_pieces += res.is_ok() as usize;
-            processing_state.ignored_pieces += res.is_err() as usize;
-
+            let mut handle = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(file_export)?;
+            
+            handle.set_len(file.metadata.file_length)?;
+            handle.seek(SeekFrom::Start(file.read_start_position))?;
+            handle.write_all(&output_bytes[start_position..end_position])?;
+            processing_state.writable_pieces += 1;
         }
     
         for file in &item.files {

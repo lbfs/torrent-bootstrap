@@ -258,6 +258,7 @@ pub struct TorrentProcessState {
 
     // We may detect successful pieces that don't need to be written, as they 
     // may either be padding files or content is already on-disk.
+    // For global state, pieces with partial writes do not count as ignored.
     pub writable_pieces: usize,
     pub ignored_pieces: usize,
     
