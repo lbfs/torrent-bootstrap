@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     finder::{
-        add_export_paths, build_global_torrent_state, build_info_hash_file_index_lookup_table, build_torrent_metadata_table, fix_export_file_lengths, get_unique_file_lengths, populate_metadata_searches, FileCache, TorrentMetadataEntry
+        add_export_paths, arcify_metadata, build_global_torrent_state, build_info_hash_file_index_lookup_table, build_torrent_metadata_table, fix_export_file_lengths, get_unique_file_lengths, populate_metadata_searches, FileCache, TorrentMetadataEntry
     }, get_sha1_hexdigest, solver::{run, PieceSolver, PieceUpdate}, torrent::{Pieces, Torrent}, writer::FileWriter
 };
 
@@ -68,6 +68,7 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     );
 
     let metadata = setup_metadata(torrents, &options.export_directory, &options.scan_directories, options.resize_export_files)?;
+    let metadata = arcify_metadata(metadata);
 
     println!(
         "File finder finished setup at {} seconds.",
@@ -75,7 +76,7 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     );
 
     // Setup work
-    let work = convert_pieces_to_work(torrents, metadata);
+    let work = convert_pieces_to_work(torrents, &metadata);
 
     // Setup Writer
     let mut writer = FileWriter::new(&work, options.threads);
@@ -145,7 +146,7 @@ pub fn start(mut options: OrchestratorOptions) -> Result<(), std::io::Error> {
     // Start processing the work
     println!("Solver threads started at {} seconds.", now.elapsed().as_secs());
 
-    let solver = PieceSolver::new(sender, &work);   
+    let solver = PieceSolver::new(sender, &metadata, &work);   
     run(work, solver, options.threads);
 
     println!("Solver threads completed at {} seconds.", now.elapsed().as_secs());
@@ -181,7 +182,7 @@ fn setup_metadata(torrents: &[Torrent], export_directory: &PathBuf, scan_directo
 
 fn convert_pieces_to_work(
     torrents: &[Torrent],
-    metadata: Vec<TorrentMetadataEntry>
+    metadata: &[Arc<TorrentMetadataEntry>]
 ) -> Vec<OrchestrationPiece> {
     let lookup = build_info_hash_file_index_lookup_table(metadata);
 

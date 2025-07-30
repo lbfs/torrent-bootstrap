@@ -1,5 +1,7 @@
-use std::{collections::HashMap, ops::DerefMut, path::PathBuf, sync::{mpsc::{SyncSender}, Arc}};
-use crate::{get_sha1_hexdigest, orchestrator::OrchestrationPiece};
+use std::{collections::HashMap, fs::File, ops::DerefMut, path::PathBuf, sync::{mpsc::SyncSender, Arc}};
+use hashlru::Cache;
+
+use crate::{finder::TorrentMetadataEntry, get_sha1_hexdigest, orchestrator::OrchestrationPiece};
 use super::{multiple, single};
 
 pub struct PieceUpdate {
@@ -10,15 +12,28 @@ pub struct PieceUpdate {
     pub output_paths: Option<Vec<Option<Arc<PathBuf>>>>
 }
 
-#[derive(Clone)]
 pub struct PieceSolver {
     output_paths: Vec<Option<Arc<PathBuf>>>,
     output_bytes: Vec<u8>,
     sender: SyncSender<PieceUpdate>,
+    cache: Cache<Arc<PathBuf>, File>,
+    max_handles: usize
+}
+
+impl Clone for PieceSolver {
+    fn clone(&self) -> Self {
+        Self { 
+            output_paths: self.output_paths.clone(), 
+            output_bytes: self.output_bytes.clone(), 
+            sender: self.sender.clone(), 
+            cache: Cache::new(self.max_handles),
+            max_handles: self.max_handles.clone() 
+        }
+    }
 }
 
 impl PieceSolver {
-    pub fn new(sender: SyncSender<PieceUpdate>, pieces: &[OrchestrationPiece]) -> PieceSolver {
+    pub fn new(sender: SyncSender<PieceUpdate>, metadata: &[Arc<TorrentMetadataEntry>], pieces: &[OrchestrationPiece]) -> PieceSolver {
         let max_files = pieces
             .iter()
             .map(|piece| piece.files.len())
@@ -31,10 +46,26 @@ impl PieceSolver {
             .max()
             .unwrap_or(0);
 
+        let max_handles = metadata
+            .iter()
+            .map(|entry| {
+                if let Some(searches) = &entry.searches {
+                    searches.len()
+                } else {
+                    0
+                }
+            })
+            .max()
+            .unwrap_or_else(|| 1);
+        let max_handles = std::cmp::max(1, max_handles);
+        println!("Initializing PieceSolver with maximum {} open file handles.", max_handles);
+
         PieceSolver {
             output_paths: Vec::with_capacity(max_files),
             output_bytes: Vec::with_capacity(max_piece_length as usize),
             sender,
+            cache: Cache::new(max_handles),
+            max_handles: max_handles
         }
     }
 
@@ -92,8 +123,9 @@ impl PieceSolver {
         let found = if is_rejected {
             false
         } else if piece.files.len() == 1 {
-            single::scan(piece, &mut self.output_paths, &mut self.output_bytes)?
+            single::scan(piece, &mut self.output_paths, &mut self.output_bytes, &mut self.cache)?
         } else {
+            self.cache.clear();
             multiple::scan(piece, &mut self.output_paths, &mut self.output_bytes)?
         };
 
@@ -113,42 +145,45 @@ pub fn balance(thread_entries: &mut [impl DerefMut<Target=Vec<OrchestrationPiece
         entries.extend(entry.drain(..));
     }
 
-    // Balance the work by | Multiples -> Most Complex to Least Complex | | Singles -> 1,2,3,4,5,1,2,3,4,5 | 
+    // Balance the work by | Multiples -> Most Complex to Least Complex |
     let mut singles: HashMap<usize, Vec<OrchestrationPiece>> = HashMap::new();
-    let mut result = Vec::new();
+    let mut multiples = Vec::new();
 
     for entry in entries.into_iter() {
         if entry.files.len() == 1 {
             let items: &mut _ = singles.entry(entry.files[0].metadata.id).or_default();
             items.push(entry);
         } else {
-            result.push(entry);
+            multiples.push(entry);
         }
     }
 
-    result.sort_by(|left, right| left.files.len().cmp(&right.files.len()));
-    result.reverse();
-
-    let mut remaining = true;
-    while remaining {
-        let mut found = false;
-
-        for (_, value) in singles.iter_mut() {
-            if !value.is_empty() {
-                result.push(value.pop().unwrap());
-                found = true;
-            }
-        }
-
-        remaining = found;
+    // Sort the pieces by their start positions
+    for (_, pieces) in singles.iter_mut() {
+        pieces.sort_by(|left, right| {
+            let left_value = left.files.first().unwrap().read_start_position;
+            let right_value = right.files.first().unwrap().read_start_position;
+            left_value.cmp(&right_value)
+        })
     }
 
-    result.reverse();
+    multiples.sort_by(|left, right| left.files.len().cmp(&right.files.len()));
+    multiples.reverse();
 
-    // Place them back on the threads evenly as possible
+    // Evenly distribute all of the complex pieces (>1 file)
     let mut thread_index = 0;
-    while let Some(element) = result.pop() {
+    while let Some(element) = multiples.pop() {
         thread_entries[thread_index].push(element);
+
+        thread_index += 1;
+        thread_index *= (thread_index < thread_entries.len()) as usize;
+    }
+
+    // Distribute the pieces so that each thread works on the same files always
+    // This is to maximize hitting the cache for a specific file.
+    let mut thread_index = 0;
+    for (_, pieces) in singles.into_iter() {
+        thread_entries[thread_index].extend(pieces);
 
         thread_index += 1;
         thread_index *= (thread_index < thread_entries.len()) as usize;

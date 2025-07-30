@@ -1,8 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{fs::File, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}, sync::Arc};
 
 use sha1::{digest::core_api::CoreWrapper, Digest, Sha1, Sha1Core};
 
-use crate::{finder::read_bytes, orchestrator::OrchestrationPiece};
+use crate::orchestrator::OrchestrationPiece;
 
 type Cache = Vec<Vec<(Option<Arc<PathBuf>>, Vec<u8>)>>;
 
@@ -95,4 +95,19 @@ fn preload(piece: &OrchestrationPiece) -> std::io::Result<Cache> {
     }
 
     Ok(loaded)
+}
+
+fn read_bytes(
+    path: &Path,
+    read_length: u64,
+    read_start_position: u64
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut handle = File::open(path)?;
+    let mut read_bytes = Vec::with_capacity(read_length as usize);
+
+    handle.seek(SeekFrom::Start(read_start_position))?;
+    handle.take(read_length)
+        .read_to_end(&mut read_bytes)?;
+
+    Ok(read_bytes)
 }

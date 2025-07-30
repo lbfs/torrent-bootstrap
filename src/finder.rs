@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Seek, SeekFrom}, os::unix::fs::MetadataExt, path::{Path, PathBuf}, sync::{Arc, Mutex}
+    collections::{HashMap, HashSet}, fs::OpenOptions, os::unix::fs::MetadataExt, path::{Path, PathBuf}, sync::{Arc, Mutex}
 };
 use walkdir::WalkDir;
 
@@ -417,17 +417,23 @@ fn add_path_or_get_if_exists(path_to_reference_counted: &mut HashMap<PathBuf, Ar
     value
 }
 
-pub fn build_info_hash_file_index_lookup_table(metadata: Vec<TorrentMetadataEntry>) -> HashMap<Vec<u8>, HashMap<usize, Arc<TorrentMetadataEntry>>> {
+pub fn arcify_metadata(metadata: Vec<TorrentMetadataEntry>) -> Vec<Arc<TorrentMetadataEntry>> {
+    metadata
+        .into_iter()
+        .map(|item| Arc::new(item))
+        .collect()
+}
+
+pub fn build_info_hash_file_index_lookup_table(metadata: &[Arc<TorrentMetadataEntry>]) -> HashMap<Vec<u8>, HashMap<usize, Arc<TorrentMetadataEntry>>> {
     let mut metadata_id_lookup: HashMap<Vec<u8>, HashMap<usize, Arc<TorrentMetadataEntry>>> = HashMap::new();
 
-    for entry in metadata.into_iter() {
-        let entry = Arc::new(entry);
-
+    for entry in metadata.iter() {
+    
         metadata_id_lookup
             .entry(entry.info_hash.clone())
             .or_default()
             .entry(entry.file_index)
-            .or_insert(entry);
+            .or_insert(entry.clone());
     }
 
     metadata_id_lookup
@@ -453,35 +459,4 @@ fn format_path_single(torrent: &Torrent, export_directory: &Path) -> PathBuf {
     [export_directory, info_hash_path, data, torrent_name]
         .iter()
         .collect()
-}
-
-pub(crate) fn read_bytes(
-    path: &Path,
-    read_length: u64,
-    read_start_position: u64
-) -> Result<Vec<u8>, std::io::Error> {
-    let mut handle = File::open(path)?;
-    let mut read_bytes = Vec::with_capacity(read_length as usize);
-
-    handle.seek(SeekFrom::Start(read_start_position))?;
-    handle.take(read_length)
-        .read_to_end(&mut read_bytes)?;
-
-    Ok(read_bytes)
-}
-
-pub(crate) fn read_bytes_reuse_buffer(
-    path: &Path,
-    read_length: u64,
-    read_start_position: u64,
-    mut read_bytes: &mut Vec<u8>
-) -> Result<(), std::io::Error> {
-    let mut handle = File::open(path)?;
-
-    read_bytes.clear();
-    handle.seek(SeekFrom::Start(read_start_position))?;
-    handle.take(read_length)
-        .read_to_end(&mut read_bytes)?;
-
-    Ok(())
 }
