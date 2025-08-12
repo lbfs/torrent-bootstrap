@@ -1,7 +1,7 @@
 use std::fmt::Write as FmtWrite;
 use sha1::{Digest, Sha1};
 
-use crate::BencodeDictionary;
+use crate::bencode::BencodeDictionary;
 
 pub fn calculate_info_hash(info: &BencodeDictionary, bytes: &[u8]) -> Vec<u8> {
     let mut hasher = Sha1::new();

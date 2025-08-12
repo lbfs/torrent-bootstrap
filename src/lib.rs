@@ -1,11 +1,7 @@
-mod finder;
-mod torrent;
-mod orchestrator;
-mod bencode;
-mod writer;
-mod solver;
-
-pub use orchestrator::OrchestratorOptions;
-pub use orchestrator::start;
-pub use bencode::*;
-pub use torrent::*;
+pub mod torrent;
+pub mod filesystem;
+pub mod bencode;
+pub mod orchestrator;
+pub mod metadata;
+pub mod solver;
+pub mod writer;

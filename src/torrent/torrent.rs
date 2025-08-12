@@ -1,27 +1,41 @@
 use crate::bencode::{BencodeDictionary, BencodeError, BencodeErrorKind, BencodeList, BencodeToken, Parser};
-use super::{calculate_info_hash, error::TorrentErrorKind, TorrentError};
+use super::info::calculate_info_hash;
+use super::error::{TorrentError, TorrentErrorKind};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Torrent {
     // We do not record outer properties as they are not relevant to this program.
-    pub info: Info,
+    pub info: TorrentInfo,
     // Not a field in a torrent, but tracked here as it is needed for identification.
     pub info_hash: Vec<u8>
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Info {
+pub struct TorrentInfo {
     pub name: String,
     pub length: Option<u64>,
-    pub files: Option<Vec<File>>,
+    pub attr: Option<Vec<u8>>,
+    pub files: Option<Vec<TorrentFile>>,
     pub piece_length: u64,
     pub pieces: Vec<Vec<u8>>
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct File {
+pub struct TorrentFile {
     pub length: u64,
-    pub path: Vec<String>
+    pub path: Vec<String>,
+    pub attr: Option<Vec<u8>>
+}
+
+impl TorrentFile {
+    pub fn padding(&self) -> bool {
+        if let Some(attr) = &self.attr {
+            return attr.contains(&b'p')
+        }
+        
+        return self.path.len() == 2 && 
+            self.path[0] == ".pad" && self.path[1].chars().all(char::is_numeric)
+    }
 }
 
 // Converter
@@ -55,7 +69,7 @@ impl Torrent {
         })        
     }
 
-    fn evaluate_info(info: &BencodeDictionary) -> Result<Info, TorrentError> {
+    fn evaluate_info(info: &BencodeDictionary) -> Result<TorrentInfo, TorrentError> {
         // https://github.com/BiglySoftware/BiglyBT/issues/1274
         let name_utf8 = info.find_string_value(b"name.utf-8")
             .map_err(Torrent::convert_error);
@@ -136,17 +150,26 @@ impl Torrent {
             Err(TorrentError::new(TorrentErrorKind::MalformedData, "Piece count does not fall with-in the expected piece boundary.".to_string()))?
         }
 
-        Ok(Info {
+        // See if the attr property is set
+        let attr = match info.find_string_value(b"attr") {
+            Ok(local_attr) => {
+                Some(local_attr.value.clone())
+            },
+            Err(_) => None
+        };
+
+        Ok(TorrentInfo {
             name,
             files,
+            attr,
             length,
             piece_length,
             pieces
         })
     }
 
-    fn evaluate_files(files: &BencodeList) -> Result<Vec<File>, TorrentError> {
-        let mut files_result: Vec<File> = Vec::new(); 
+    fn evaluate_files(files: &BencodeList) -> Result<Vec<TorrentFile>, TorrentError> {
+        let mut files_result: Vec<TorrentFile> = Vec::new(); 
 
         for file_entry in &files.value {
             match file_entry {
@@ -163,7 +186,7 @@ impl Torrent {
         Ok(files_result)
     }
 
-    fn evaluate_file(file: &BencodeDictionary) -> Result<File, TorrentError> {
+    fn evaluate_file(file: &BencodeDictionary) -> Result<TorrentFile, TorrentError> {
         let length = file.find_integer_value(b"length")
             .map_err(Torrent::convert_error)?;
 
@@ -205,8 +228,17 @@ impl Torrent {
             Err(TorrentError::new(TorrentErrorKind::MalformedData, "File cannot have an empty path.".to_string()))?
         }
 
-        Ok(File {
+        // File Attributes
+        let attr = match file.find_string_value(b"attr") {
+            Ok(local_attr) => {
+                Some(local_attr.value.clone())
+            },
+            Err(_) => None
+        };
+
+        Ok(TorrentFile {
             length,
+            attr,
             path: result_paths.into_iter().collect()
         })
     }
@@ -279,10 +311,11 @@ mod tests {
         let actual = Torrent::from_bytes(&input);
         let actual = actual.unwrap();
         let expected = Torrent {
-            info: Info {
+            info: TorrentInfo {
                 name: "example.png".to_string(),
                 length: Some(393339),
                 files: None,
+                attr: None,
                 piece_length: 524288,
                 pieces: vec![
                     vec![61, 3, 229, 89, 49, 68, 20, 82, 246, 47, 157, 161, 155, 97, 235, 212, 64, 88, 227, 255]
@@ -320,16 +353,19 @@ mod tests {
         let actual = actual.unwrap();
 
         let expected = Torrent {
-            info: Info {
+            info: TorrentInfo {
                 name: "Example".to_string(),
                 length: None,
+                attr: None,
                 files: Some(vec![
-                    File {
+                    TorrentFile {
                         length: 262540,
+                        attr: None,
                         path: vec!["1.png".to_string()],
                     },
-                    File {
+                    TorrentFile {
                         length: 557338,
+                        attr: None,
                         path: vec!["2.jpeg".to_string()],
                     },
                 ]),

@@ -129,23 +129,26 @@ impl Pieces {
 
 #[cfg(test)]
 mod tests {
-    use crate::{File, Info};
+    use crate::torrent::{TorrentFile, TorrentInfo};
 
     use super::*;
 
     #[test]
     fn construct_pieces_multiple_file_should_succeed() {
         let torrent = Torrent {
-            info: Info {
+            info: TorrentInfo {
                 name: "Example".to_string(),
                 length: None,
+                attr: None,
                 files: Some(vec![
-                    File {
+                    TorrentFile {
                         length: 262540,
+                        attr: None,
                         path: vec!["1.png".to_string()],
                     },
-                    File {
+                    TorrentFile {
                         length: 557338,
+                        attr: None,
                         path: vec!["2.jpeg".to_string()],
                     },
                 ]),
@@ -199,10 +202,11 @@ mod tests {
     #[test]
     fn construct_pieces_single_file_should_succeed() {
         let torrent = Torrent {
-            info: Info {
+            info: TorrentInfo {
                 name: "1.png".to_string(),
                 length: Some(262540),
                 files: None,
+                attr: None,
                 piece_length: 131072,
                 pieces: vec![
                     vec![

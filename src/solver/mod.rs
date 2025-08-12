@@ -1,7 +1,3 @@
-mod executor;
-mod solver;
-mod multiple;
-mod single;
-
-pub use solver::*;
-pub use executor::*;
+pub mod executor;
+pub mod task;
+pub mod choices;

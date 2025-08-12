@@ -1,7 +1,7 @@
 use std::{fs::{self}, path::{Path, PathBuf}, time::Instant};
 
 use clap::Parser;
-use torrent_bootstrap::{OrchestratorOptions, Torrent};
+use torrent_bootstrap::{orchestrator::OrchestratorOptions, torrent::Torrent};
 
 #[derive(Parser)] // requires `derive` feature
 #[command(version, about, long_about = None)]
@@ -53,7 +53,7 @@ fn run() -> std::io::Result<()> {
         resize_export_files: args.resize_export_files
     };
 
-    let res = torrent_bootstrap::start(options);
+    let res = torrent_bootstrap::orchestrator::start(options);
     let elapsed = now.elapsed().as_secs();
     println!("Time elapsed took {} seconds for {} torrents.", elapsed, torrent_len);
     res

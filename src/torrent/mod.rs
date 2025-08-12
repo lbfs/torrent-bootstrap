@@ -1,9 +1,6 @@
 mod torrent;
-mod pieces;
-mod error;
-mod info;
+pub mod pieces;
+pub mod error;
+pub mod info;
 
 pub use torrent::*;
-pub use pieces::*;
-pub use error::*;
-pub use info::*;

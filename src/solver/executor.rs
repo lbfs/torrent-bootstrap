@@ -1,49 +1,44 @@
-use std::{sync::{Arc, Mutex, MutexGuard}, thread::{self, JoinHandle}};
+use std::{sync::{mpsc::SyncSender, Arc, Mutex, MutexGuard}, thread::{self, JoinHandle}};
 
-use crate::orchestrator::OrchestrationPiece;
+use crate::solver::{choices::ChoiceConsumer, task::{PieceUpdate, Solver, Task}};
 
-use super::{balance, PieceSolver};
-
-struct ExecutionState<T> {
-    active_threads: usize,
-    locks: Vec<Arc<Mutex<Vec<T>>>>
+struct ExecutionState {
+    pending: Mutex<Vec<Task>>,
+    active: Vec<Mutex<Option<Task>>>
 }
 
-pub fn run(items: Vec<OrchestrationPiece>, solver: PieceSolver, thread_count: usize) {
+pub fn run(mut items: Vec<Task>, thread_count: usize, writer: SyncSender<PieceUpdate>) {
     if items.is_empty() {
         return;
     }
 
     let thread_count = std::cmp::max(std::cmp::min(items.len(), thread_count), 1);
 
-    // Setup work for balancing
-    let mut entries: Vec<Vec<_>> = Vec::with_capacity(thread_count);
-    entries.push(items);
-    for _ in 1..thread_count {
-        entries.push(Vec::new())
+    let mut active_tasks: Vec<Mutex<Option<Task>>> = Vec::new();
+    for _ in 0..thread_count {
+        match items.pop() {
+            Some(item) => {
+                active_tasks.push(Mutex::new(Some(item)))
+            }
+            None => {
+                active_tasks.push(Mutex::new(None));
+            }
+        }     
     }
 
-    balance(&mut (entries.iter_mut().collect::<Vec<_>>()));
-
-    // Setup state and start
-    let locks: Vec<_> = entries
-        .into_iter()
-        .map(|value| Arc::new(Mutex::new(value)))
-        .collect();
-
-    let execution_state = Arc::new(Mutex::new(ExecutionState {
-        active_threads: locks.len(),
-        locks: locks.clone()
-    }));
+    let execution_state = Arc::new(ExecutionState {
+        active: active_tasks,
+        pending: Mutex::new(items)
+    });
 
     // Start up the workers
     let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(thread_count);
-    for (thread_id, local) in locks.into_iter().enumerate() {
+    for thread_id in 0..thread_count {
+        let writer = writer.clone();
         let execution_state = execution_state.clone();
-        let solver = solver.clone();
 
         let handle = thread::spawn(move || {
-            run_internal(solver, thread_id, local, execution_state);
+            run_internal(thread_id, execution_state, writer);
         });
 
         handles.push(handle);
@@ -55,74 +50,95 @@ pub fn run(items: Vec<OrchestrationPiece>, solver: PieceSolver, thread_count: us
     }
 }
 
-fn run_internal(mut solver: PieceSolver, thread_id: usize, local: Arc<Mutex<Vec<OrchestrationPiece>>>, execution_state: Arc<Mutex<ExecutionState<OrchestrationPiece>>>) {
+fn run_internal(thread_id: usize, execution_state: Arc<ExecutionState>, mut writer: SyncSender<PieceUpdate>) {
+    let mut current_thread_id = thread_id;
+    let mut choice_consumer = ChoiceConsumer::empty();
+    let mut solver = Solver::new();
+
     'outer: loop {
         let found = {
-            let guard = local.try_lock();
-            
-            if let Ok(mut guard) = guard {
-                guard.pop()
-            } else {
-                None
+            let mut guard = execution_state
+                .active[current_thread_id]
+                .lock()
+                .unwrap();
+
+            let mut item = None;
+            if let Some(generator) = guard.as_mut() {
+                item = generator.take(&mut choice_consumer);
+                if let None = item {
+                    guard.take();
+                }
             }
+
+            item            
         };
 
         match found {
-            Some(work) => {
-                solver.solve(work);
+            Some(task_state) => {
+                solver.solve(&mut choice_consumer, task_state.as_ref(), &mut writer);
             },
             None => {
-                let mut state = execution_state.lock().unwrap();
+                let mut pending = execution_state.pending
+                    .lock()
+                    .unwrap();
 
-                // Exit the thread if we are terminated.
-                if thread_id >= state.active_threads {
-                    break 'outer;
+                let mut local = execution_state.active[thread_id]
+                    .lock()
+                    .unwrap();
+
+                // Another thread has performed a re-balance of work.
+                if local.is_some() {
+                    continue;
                 }
 
                 // If multiple threads were waiting for work, we need to abort the thread from
                 // performing a work re-balance, as it was just done.
-                let guard = local.lock().unwrap();
-                if guard.len() > 0 {
-                    continue 'outer;
+                if !pending.is_empty() {
+                    let _ = local.insert(pending.pop().unwrap());
+                    continue;
                 }
 
-                // Store all the thread guards in the exact order they are in based on thread id
-                let mut thread_guards: Vec<MutexGuard<Vec<_>>> = Vec::with_capacity(state.active_threads);
+                // Lock all the threads so we can steal and re-balance the work for optimal round-robin.
+                let mut thread_guards: Vec<MutexGuard<_>> = Vec::with_capacity(execution_state.active.len());
+
                 for thread_index in 0..thread_id {
-                    let guard = state.locks[thread_index]
+                    let guard = execution_state.active[thread_index]
                         .lock()
                         .unwrap();
 
                     thread_guards.push(guard);
                 }
 
-                thread_guards.push(guard);
+                thread_guards.push(local);
 
-                for thread_index in thread_id + 1..state.active_threads {
-                    let guard = state.locks[thread_index]
+                for thread_index in thread_id + 1..execution_state.active.len() {
+                    let guard = execution_state.active[thread_index]
                         .lock()
                         .unwrap();
 
                     thread_guards.push(guard);
                 }
 
-                // Balance the work across all the active threads
-                balance(&mut thread_guards[0..state.active_threads]);
-
-                // Remove any threads off the tail from processing if they have no work.
-                let mut deactivated_threads = 0;
-                for thread_index in (0..thread_guards.len()).rev() {
-                    if thread_guards[thread_index].len() > 0 {
-                        break;
+                // Fetch all the remaining tasks
+                let mut remaining: Vec<Task> = Vec::new();
+                for thread in thread_guards.iter_mut() {
+                    if let Some(item) = thread.take() {
+                        remaining.push(item);
                     }
-
-                    thread_guards[thread_index].clear();
-                    thread_guards[thread_index].shrink_to_fit();
-                    deactivated_threads += 1;
                 }
 
-                drop(thread_guards);
-                state.active_threads -= deactivated_threads;
+                let remaining_work_len = remaining.len();
+
+                if remaining_work_len == 0 {
+                    // Terminate the thread when all work has been exhausted.
+                    break 'outer;
+                }
+
+                for (assignment, item) in remaining.into_iter().enumerate() {
+                    let _ = thread_guards[assignment].insert(item);
+                }
+
+                current_thread_id = thread_id % remaining_work_len;
             }
         }
     }
