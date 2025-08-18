@@ -24,6 +24,20 @@ impl PathCacheEntry {
     }
 }
 
+impl PartialOrd for PathCacheEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PathCacheEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.device_node.cmp(&other.device_node)
+            .then(self.index_node.cmp(&other.index_node))
+            .then(self.file_length.cmp(&other.file_length))
+    }
+}
+
 impl PartialEq for PathCacheEntry {
     fn eq(&self, other: &Self) -> bool {
         self.file_length == other.file_length && self.device_node == other.device_node && self.index_node == other.index_node

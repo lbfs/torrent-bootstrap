@@ -1,4 +1,4 @@
-use std::{fs::File, io::{Read, Seek, SeekFrom}, path::Path, sync::{atomic::{AtomicBool, Ordering}, mpsc::SyncSender, Arc, Mutex}};
+use std::{collections::HashMap, fs::File, io::{Read, Seek, SeekFrom}, path::Path, sync::{atomic::{AtomicBool, Ordering}, mpsc::SyncSender, Arc, Mutex}};
 use sha1::{digest::core_api::CoreWrapper, Digest, Sha1, Sha1Core};
 
 use crate::{filesystem::FrozenPathInterner, metadata::{TorrentFileEntry, TorrentPieceEntry, TorrentProcessState}, solver::choices::{ChoiceConsumer, ChoiceGenerator}};
@@ -104,29 +104,32 @@ impl Task {
                 .solver_metadata
                 .torrent_files[piece_file.file_id];
 
-            let mut results: Vec<(Option<usize>, Vec<u8>)> = Vec::new();
+            let mut results: HashMap<Vec<u8>, Option<usize>> = HashMap::new();
 
             if torrent_file.padding { 
-                results.push((None, vec![0; piece_file.read_length as usize]));
+                results.insert(vec![0; piece_file.read_length as usize], None);
             } else if let Some(searches) = torrent_file.searches.as_ref() {
                 // De-duplicate identical files if the file has already been seen.
                 'inner: for search_path_handle in searches {
                     let search_path = self.solver_metadata.path_interner.get(*search_path_handle);
                     let value = Self::read_bytes(search_path, piece_file.read_length, piece_file.read_start_position)?;
         
-                    for (_, result_bytes) in results.iter() {
-                        if result_bytes.cmp(&value).is_eq() {
-                            continue 'inner;
-                        }
+                    if results.contains_key(&value) {
+                        continue;
                     }
         
-                    results.push((Some(*search_path_handle), value));
+                    results.insert(value, Some(*search_path_handle));
                 }
             } else {
                 return Ok(Vec::new());
             }
 
-            loaded.push(results);
+            let mut real: Vec<(Option<usize>, Vec<u8>)> = Vec::new();
+            for (key, value) in results.into_iter() {
+                real.push((value, key));
+            }
+
+            loaded.push(real);
         }
 
         Ok(loaded)

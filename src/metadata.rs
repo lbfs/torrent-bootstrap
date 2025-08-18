@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::OpenOptions, path::{Path, PathBuf}, sync::Mutex};
+use std::{collections::{BTreeSet, HashMap}, fs::OpenOptions, path::{Path, PathBuf}, sync::Mutex};
 
 use crate::{filesystem::{ExportPathFormatter, FrozenPathInterner, PathCacheEntry, PathInterner}, torrent::{pieces::Pieces, Torrent}};
 
@@ -304,7 +304,12 @@ pub fn discover_and_apply_searches(
         let export_target = path_interner.get(metadata.export_target);
         let relative_target = path_interner.get(metadata.relative_target);
 
+        let mut memoization: HashMap<(usize, usize), std::cmp::Ordering> = HashMap::new();
         handles.sort_by(|left, right| {
+            if let Some(ordering) = memoization.get(&(*left, *right)) {
+                return *ordering;
+            }
+
             let left_path = path_interner.get(*left);
             let right_path = path_interner.get(*right);
 
@@ -313,28 +318,25 @@ pub fn discover_and_apply_searches(
             let right_sim 
                 = find_file_similarity(right_path, relative_target, export_target);
 
-            left_sim.cmp(&right_sim)
+            let ordering = left_sim.cmp(&right_sim);
+            memoization.insert((*left, *right), ordering);
+            ordering
         });
 
         // Remove hard-links by keeping the order of the ranking and only keeping the first
         // file that has a specific device and index node, discarding any other duplicates.
+        let mut filtered_path_cache = BTreeSet::new();
         let mut filtered = Vec::new();
 
         for handle in handles {
             let entry = disk_metadata.get(&handle).unwrap();
-            let mut should_add = true;
 
-            for added in filtered.iter() {
-                let added_entry = disk_metadata.get(&added).unwrap();
-                if entry.eq(added_entry) {
-                    should_add = false;
-                    break;
-                }
+            if filtered_path_cache.contains(&entry) {
+                continue;
             }
 
-            if should_add {
-                filtered.push(handle);
-            }
+            filtered_path_cache.insert(entry);
+            filtered.push(handle);
         }
 
         // Search is valid only if there are items.
